@@ -8,7 +8,7 @@
  * that can be extended for AWS, Azure, GCP, or any other cloud provider.
  */
 
-import { App, TerraformStack, AssetHashType, FileAssetPackaging } from "cdktn";
+import { App, TerraformStack, FileAssetPackaging } from "cdktn";
 import type {
   FileAssetSource,
   FileAssetLocation,

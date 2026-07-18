@@ -45,6 +45,8 @@ export * from "./terraform-resource-targets";
 export * from "./upgrade-id-aspect";
 export * from "./terraform-data-resource";
 export * from "./assets";
+export * from "./bundling";
+export * from "./asset-staging";
 // required for JSII because Fn extends from it
 export * from "./functions/terraform-functions.generated";
 export * from "./functions/provider-function";

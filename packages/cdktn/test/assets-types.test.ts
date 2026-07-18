@@ -16,7 +16,6 @@ describe("Assets Types", () => {
     test("has expected values", () => {
       expect(AssetHashType.SOURCE).toBe("source");
       expect(AssetHashType.OUTPUT).toBe("output");
-      expect(AssetHashType.BUNDLE).toBe("bundle");
       expect(AssetHashType.CUSTOM).toBe("custom");
     });
   });

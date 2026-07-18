@@ -62,13 +62,6 @@ export enum AssetHashType {
   SOURCE = "source",
 
   /**
-   * Based on the content of the bundled path
-   *
-   * @deprecated use `OUTPUT` instead
-   */
-  BUNDLE = "bundle",
-
-  /**
    * Based on the content of the bundling output
    *
    * Use `OUTPUT` when the source of the asset is a top level folder containing

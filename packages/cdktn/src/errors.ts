@@ -559,3 +559,14 @@ export const terraformModuleHasChildren = (pathName: string) => {
     `Trying to add children to a TerraformModule at '${pathName}'. TerraformModules cannot have children, if you want to group resources or constructs in general together please use the Constructs class instead. See https://cdktn.io/docs/concepts/constructs for more details.`,
   );
 };
+
+/**
+ * Error thrown when a command execution fails
+ */
+export class ExecutionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ExecutionError";
+    Object.setPrototypeOf(this, ExecutionError.prototype);
+  }
+}
