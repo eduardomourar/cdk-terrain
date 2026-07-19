@@ -1,7 +1,0 @@
-{
-  "name": "sample-app",
-  "version": "1.0.0",
-  "scripts": {
-    "build": "echo 'Building...' && mkdir -p dist && echo 'console.log(\"Hello\");' > dist/index.js"
-  }
-}

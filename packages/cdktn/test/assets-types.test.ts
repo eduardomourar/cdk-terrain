@@ -201,4 +201,80 @@ describe("Assets Types", () => {
       expect(options.assetHash).toBeUndefined();
     });
   });
+
+  describe("Multi-cloud FileAssetLocation examples", () => {
+    test("can represent AWS S3 location", () => {
+      const s3Location: FileAssetLocation = {
+        bucketName: "my-bucket",
+        objectKey: "assets/abc123.zip",
+        httpUrl:
+          "https://s3-us-east-1.amazonaws.com/my-bucket/assets/abc123.zip",
+        objectUrl: "s3://my-bucket/assets/abc123.zip",
+      };
+
+      expect(s3Location.bucketName).toBe("my-bucket");
+      expect(s3Location.objectUrl).toContain("s3://");
+    });
+
+    test("can represent Azure Blob Storage location", () => {
+      const azureLocation: FileAssetLocation = {
+        bucketName: "mycontainer",
+        objectKey: "assets/abc123.zip",
+        httpUrl:
+          "https://mystorageaccount.blob.core.windows.net/mycontainer/assets/abc123.zip",
+        objectUrl: "az://mycontainer/assets/abc123.zip",
+      };
+
+      expect(azureLocation.bucketName).toBe("mycontainer");
+      expect(azureLocation.objectUrl).toContain("az://");
+    });
+
+    test("can represent GCS location", () => {
+      const gcsLocation: FileAssetLocation = {
+        bucketName: "my-gcs-bucket",
+        objectKey: "assets/abc123.zip",
+        httpUrl:
+          "https://storage.googleapis.com/my-gcs-bucket/assets/abc123.zip",
+        objectUrl: "gs://my-gcs-bucket/assets/abc123.zip",
+      };
+
+      expect(gcsLocation.bucketName).toBe("my-gcs-bucket");
+      expect(gcsLocation.objectUrl).toContain("gs://");
+    });
+  });
+
+  describe("Multi-cloud DockerImageAssetLocation examples", () => {
+    test("can represent AWS ECR location", () => {
+      const ecrLocation: DockerImageAssetLocation = {
+        imageUri: "123456789012.dkr.ecr.us-east-1.amazonaws.com/my-repo:abc123",
+        repositoryName: "my-repo",
+        imageTag: "abc123",
+      };
+
+      expect(ecrLocation.imageUri).toContain("ecr.us-east-1");
+      expect(ecrLocation.repositoryName).toBe("my-repo");
+    });
+
+    test("can represent Azure ACR location", () => {
+      const acrLocation: DockerImageAssetLocation = {
+        imageUri: "myregistry.azurecr.io/my-repo:abc123",
+        repositoryName: "my-repo",
+        imageTag: "abc123",
+      };
+
+      expect(acrLocation.imageUri).toContain("azurecr.io");
+      expect(acrLocation.repositoryName).toBe("my-repo");
+    });
+
+    test("can represent GCP Artifact Registry location", () => {
+      const garLocation: DockerImageAssetLocation = {
+        imageUri: "us-docker.pkg.dev/my-project/my-repo/my-image:abc123",
+        repositoryName: "my-repo",
+        imageTag: "abc123",
+      };
+
+      expect(garLocation.imageUri).toContain("pkg.dev");
+      expect(garLocation.repositoryName).toBe("my-repo");
+    });
+  });
 });

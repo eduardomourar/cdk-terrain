@@ -1,7 +1,6 @@
 packages:
   - 'packages/*'
   - 'packages/@cdktn/*'
-  - '!examples/typescript/docker-bundling/sample*/**'
   - '!examples/**/cdktf.out/**/'
   - 'examples/**'
   - 'tools/generate-function-bindings'

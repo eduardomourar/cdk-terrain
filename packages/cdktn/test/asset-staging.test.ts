@@ -295,4 +295,483 @@ describe("AssetStaging", () => {
       expect(asset1.assetHash).toBe(asset2.assetHash);
     });
   });
+
+  describe("exclusion patterns", () => {
+    test("excludes markdown files", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const dir = path.join(tempDir, "testdir");
+      fs.mkdirSync(dir);
+      fs.writeFileSync(path.join(dir, "index.js"), "console.log('hi')");
+      fs.writeFileSync(path.join(dir, "README.md"), "# Docs");
+
+      const assetWithMd = new AssetStaging(stack, "WithMd", {
+        sourcePath: dir,
+      });
+
+      const assetNoMd = new AssetStaging(stack, "NoMd", {
+        sourcePath: dir,
+        exclude: ["*.md"],
+      });
+
+      // Hash should differ when excluding files
+      expect(assetNoMd.assetHash).not.toBe(assetWithMd.assetHash);
+    });
+
+    test("excludes directories", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const dir = path.join(tempDir, "testdir");
+      fs.mkdirSync(dir);
+      fs.mkdirSync(path.join(dir, "node_modules"));
+      fs.writeFileSync(path.join(dir, "index.js"), "code");
+      fs.writeFileSync(path.join(dir, "node_modules", "dep.js"), "dep");
+
+      const assetWithNodeModules = new AssetStaging(stack, "WithNodeModules", {
+        sourcePath: dir,
+      });
+
+      const assetNoNodeModules = new AssetStaging(stack, "NoNodeModules", {
+        sourcePath: dir,
+        exclude: ["node_modules"],
+      });
+
+      expect(assetNoNodeModules.assetHash).not.toBe(
+        assetWithNodeModules.assetHash,
+      );
+    });
+  });
+
+  describe("extra hash for cache busting", () => {
+    test("changes hash when extra hash changes", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const testFile = path.join(tempDir, "test.txt");
+      fs.writeFileSync(testFile, "content");
+
+      const asset1 = new AssetStaging(stack, "Asset1", {
+        sourcePath: testFile,
+        extraHash: "v1",
+      });
+
+      const asset2 = new AssetStaging(stack, "Asset2", {
+        sourcePath: testFile,
+        extraHash: "v2",
+      });
+
+      expect(asset1.assetHash).not.toBe(asset2.assetHash);
+    });
+
+    test("same extra hash produces same hash", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const testFile = path.join(tempDir, "test.txt");
+      fs.writeFileSync(testFile, "content");
+
+      const asset1 = new AssetStaging(stack, "Asset1", {
+        sourcePath: testFile,
+        extraHash: "v1.0.0",
+      });
+
+      const asset2 = new AssetStaging(stack, "Asset2", {
+        sourcePath: testFile,
+        extraHash: "v1.0.0",
+      });
+
+      expect(asset1.assetHash).toBe(asset2.assetHash);
+    });
+  });
+
+  describe("custom hash", () => {
+    test("normalizes custom hash to SHA256", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const testFile = path.join(tempDir, "test.txt");
+      fs.writeFileSync(testFile, "content");
+
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: testFile,
+        assetHash: "my-custom-version-v1.0.0",
+        assetHashType: AssetHashType.CUSTOM,
+      });
+
+      // Custom hash should be normalized to 64-char hex
+      expect(asset.assetHash).toBeDefined();
+      expect(asset.assetHash.length).toBe(64);
+    });
+
+    test("preserves valid SHA256 hash", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const testFile = path.join(tempDir, "test.txt");
+      fs.writeFileSync(testFile, "content");
+
+      const validHash = "a".repeat(64);
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: testFile,
+        assetHash: validHash,
+        assetHashType: AssetHashType.CUSTOM,
+      });
+
+      expect(asset.assetHash).toBe(validHash);
+    });
+  });
+
+  describe("archive detection", () => {
+    test("detects .zip as archive", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const zipFile = path.join(tempDir, "archive.zip");
+      fs.writeFileSync(zipFile, "fake zip content");
+
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: zipFile,
+      });
+
+      expect(asset.isArchive).toBe(true);
+      expect(asset.packaging).toBe(FileAssetPackaging.FILE);
+    });
+
+    test("detects .tar.gz as archive", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const tarGzFile = path.join(tempDir, "archive.tar.gz");
+      fs.writeFileSync(tarGzFile, "fake tar.gz content");
+
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: tarGzFile,
+      });
+
+      expect(asset.isArchive).toBe(true);
+      expect(asset.packaging).toBe(FileAssetPackaging.FILE);
+    });
+
+    test("detects .tgz as archive", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const tgzFile = path.join(tempDir, "archive.tgz");
+      fs.writeFileSync(tgzFile, "fake tgz content");
+
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: tgzFile,
+      });
+
+      expect(asset.isArchive).toBe(true);
+      expect(asset.packaging).toBe(FileAssetPackaging.FILE);
+    });
+
+    test("detects .tar as archive", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const tarFile = path.join(tempDir, "archive.tar");
+      fs.writeFileSync(tarFile, "fake tar content");
+
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: tarFile,
+      });
+
+      expect(asset.isArchive).toBe(true);
+      expect(asset.packaging).toBe(FileAssetPackaging.FILE);
+    });
+
+    test("detects non-archive file correctly", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const txtFile = path.join(tempDir, "document.txt");
+      fs.writeFileSync(txtFile, "text content");
+
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: txtFile,
+      });
+
+      expect(asset.isArchive).toBe(false);
+      expect(asset.packaging).toBe(FileAssetPackaging.FILE);
+    });
+
+    test("detects .zip.txt as non-archive", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const txtFile = path.join(tempDir, "archive.zip.txt");
+      fs.writeFileSync(txtFile, "text content, not an archive");
+
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: txtFile,
+      });
+
+      expect(asset.isArchive).toBe(false);
+      expect(asset.packaging).toBe(FileAssetPackaging.FILE);
+    });
+
+    test("handles multiple extensions correctly", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const multiExtFile = path.join(
+        tempDir,
+        "artifact.da.vinci.monalisa.tar.gz",
+      );
+      fs.writeFileSync(multiExtFile, "fake tar.gz");
+
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: multiExtFile,
+      });
+
+      expect(asset.isArchive).toBe(true);
+      expect(asset.packaging).toBe(FileAssetPackaging.FILE);
+      expect(asset.absoluteStagedPath).toContain(".tar.gz");
+    });
+  });
+
+  describe("asset reuse and caching", () => {
+    test("reuses staging for identical assets", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const testFile = path.join(tempDir, "test.txt");
+      fs.writeFileSync(testFile, "Content");
+
+      const asset1 = new AssetStaging(stack, "Asset1", {
+        sourcePath: testFile,
+      });
+
+      const asset2 = new AssetStaging(stack, "Asset2", {
+        sourcePath: testFile,
+      });
+
+      expect(asset1.assetHash).toBe(asset2.assetHash);
+      expect(asset1.absoluteStagedPath).toBe(asset2.absoluteStagedPath);
+    });
+
+    test("preserves packaging when reusing from memory cache", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const zipFile = path.join(tempDir, "archive.zip");
+      fs.writeFileSync(zipFile, "fake zip");
+
+      const asset1 = new AssetStaging(stack, "Asset1", {
+        sourcePath: zipFile,
+      });
+
+      const asset2 = new AssetStaging(stack, "Asset2", {
+        sourcePath: zipFile,
+      });
+
+      expect(asset1.packaging).toBe(FileAssetPackaging.FILE);
+      expect(asset1.isArchive).toBe(true);
+      expect(asset2.packaging).toBe(asset1.packaging);
+      expect(asset2.isArchive).toBe(asset1.isArchive);
+    });
+  });
+
+  describe("symlink handling", () => {
+    test("follows symlink to directory", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      // Create a real directory
+      const realDir = path.join(tempDir, "real-dir");
+      fs.mkdirSync(realDir);
+      fs.writeFileSync(path.join(realDir, "file.txt"), "content");
+
+      // Create a symlink
+      const symlinkDir = path.join(tempDir, "symlink-dir");
+      try {
+        fs.symlinkSync(realDir, symlinkDir);
+      } catch (e) {
+        // Skip test if symlinks are not supported
+        return;
+      }
+
+      const assetFromReal = new AssetStaging(stack, "AssetReal", {
+        sourcePath: realDir,
+      });
+
+      const assetFromSymlink = new AssetStaging(stack, "AssetSymlink", {
+        sourcePath: symlinkDir,
+      });
+
+      // Should produce the same hash when following symlink
+      expect(assetFromSymlink.assetHash).toBe(assetFromReal.assetHash);
+    });
+  });
+
+  describe("edge cases", () => {
+    test("handles empty directory", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const emptyDir = path.join(tempDir, "empty");
+      fs.mkdirSync(emptyDir);
+
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: emptyDir,
+      });
+
+      expect(asset.assetHash).toBeDefined();
+      expect(asset.packaging).toBe(FileAssetPackaging.ZIP_DIRECTORY);
+    });
+
+    test("handles deeply nested directories", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const deepDir = path.join(tempDir, "a", "b", "c", "d", "e");
+      fs.mkdirSync(deepDir, { recursive: true });
+      fs.writeFileSync(path.join(deepDir, "file.txt"), "deep");
+
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: path.join(tempDir, "a"),
+      });
+
+      expect(asset.assetHash).toBeDefined();
+    });
+
+    test("handles special characters in filenames", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const specialDir = path.join(tempDir, "special");
+      fs.mkdirSync(specialDir);
+      fs.writeFileSync(path.join(specialDir, "file (1).txt"), "content");
+      fs.writeFileSync(path.join(specialDir, "file [2].txt"), "content");
+      fs.writeFileSync(path.join(specialDir, "file's.txt"), "content");
+
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: specialDir,
+      });
+
+      expect(asset.assetHash).toBeDefined();
+    });
+
+    test("handles very long filenames", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const longNameDir = path.join(tempDir, "longname");
+      fs.mkdirSync(longNameDir);
+      const longFileName = "a".repeat(200) + ".txt";
+      fs.writeFileSync(path.join(longNameDir, longFileName), "content");
+
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: longNameDir,
+      });
+
+      expect(asset.assetHash).toBeDefined();
+    });
+
+    test("handles binary files", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const binaryFile = path.join(tempDir, "binary.bin");
+      const buffer = Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe, 0xfd]);
+      fs.writeFileSync(binaryFile, buffer);
+
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: binaryFile,
+      });
+
+      expect(asset.assetHash).toBeDefined();
+      expect(asset.isArchive).toBe(false);
+    });
+  });
+
+  describe("file permissions", () => {
+    test("handles executable files", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const scriptFile = path.join(tempDir, "script.sh");
+      fs.writeFileSync(scriptFile, "#!/bin/bash\necho hello");
+      try {
+        fs.chmodSync(scriptFile, 0o755);
+      } catch (e) {
+        // Skip on Windows or if chmod fails
+        return;
+      }
+
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: scriptFile,
+      });
+
+      expect(asset.assetHash).toBeDefined();
+    });
+  });
+
+  describe("cross-platform behavior", () => {
+    test("handles Windows-style paths", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const testFile = path.join(tempDir, "test.txt");
+      fs.writeFileSync(testFile, "Content");
+
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: testFile,
+      });
+
+      // Hash should be consistent regardless of path separators
+      expect(asset.assetHash).toBeDefined();
+      expect(asset.assetHash.length).toBe(64);
+    });
+  });
+
+  describe("asset output structure", () => {
+    test("staged path contains hash", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const testFile = path.join(tempDir, "test.txt");
+      fs.writeFileSync(testFile, "Content");
+
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: testFile,
+      });
+
+      const stagedBasename = path.basename(asset.absoluteStagedPath);
+      expect(stagedBasename).toContain("asset.");
+      expect(stagedBasename).toContain(asset.assetHash);
+    });
+
+    test("archive files preserve extension in staged path", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const tarGzFile = path.join(tempDir, "archive.tar.gz");
+      fs.writeFileSync(tarGzFile, "fake tar.gz");
+
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: tarGzFile,
+      });
+
+      expect(asset.absoluteStagedPath).toMatch(/\.tar\.gz$/);
+    });
+
+    test("non-archive files preserve extension in staged path", () => {
+      const app = Testing.app();
+      const stack = new TerraformStack(app, "test");
+
+      const txtFile = path.join(tempDir, "document.txt");
+      fs.writeFileSync(txtFile, "content");
+
+      const asset = new AssetStaging(stack, "Asset", {
+        sourcePath: txtFile,
+      });
+
+      expect(asset.absoluteStagedPath).toMatch(/\.txt$/);
+    });
+  });
 });

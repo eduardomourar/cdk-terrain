@@ -426,62 +426,6 @@ importers:
 
   examples/python/upcloud-server: {}
 
-  examples/typescript/asset-staging:
-    dependencies:
-      cdktn:
-        specifier: workspace:*
-        version: link:../../../packages/cdktn
-      constructs:
-        specifier: 10.6.0
-        version: 10.6.0
-    devDependencies:
-      '@types/jest':
-        specifier: 30.0.0
-        version: 30.0.0
-      '@types/node':
-        specifier: 20.17.51
-        version: 20.17.51
-      cdktn-cli:
-        specifier: workspace:*
-        version: link:../../../packages/cdktn-cli
-      jest:
-        specifier: ^30.3.0
-        version: 30.3.0(@types/node@20.17.51)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5))
-      ts-node:
-        specifier: 10.9.1
-        version: 10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5)
-      typescript:
-        specifier: ^5.0.0
-        version: 5.4.5
-
-  examples/typescript/assets:
-    dependencies:
-      cdktn:
-        specifier: workspace:*
-        version: link:../../../packages/cdktn
-      constructs:
-        specifier: 10.6.0
-        version: 10.6.0
-    devDependencies:
-      '@types/jest':
-        specifier: 30.0.0
-        version: 30.0.0
-      '@types/node':
-        specifier: 20.17.51
-        version: 20.17.51
-      cdktn-cli:
-        specifier: workspace:*
-        version: link:../../../packages/cdktn-cli
-      jest:
-        specifier: ^30.3.0
-        version: 30.3.0(@types/node@20.17.51)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5))
-      ts-node:
-        specifier: 10.9.1
-        version: 10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5)
-      typescript:
-        specifier: ^5.0.0
-        version: 5.4.5
-
   examples/typescript/aws-cloudfront-proxy:
     dependencies:
       cdktn:
@@ -754,10 +698,10 @@ importers:
         version: link:../../../../packages/cdktn-cli
       jest:
         specifier: ^30.3.0
-        version: 30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0)(ts-node@10.9.2(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5))
+        version: 30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5))
       ts-node:
         specifier: ^10.9.1
-        version: 10.9.2(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5)
+        version: 10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5)
       typescript:
         specifier: ^5.0.0
         version: 5.4.5
@@ -782,10 +726,10 @@ importers:
         version: link:../../../../packages/cdktn-cli
       jest:
         specifier: ^30.3.0
-        version: 30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0)(ts-node@10.9.2(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5))
+        version: 30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5))
       ts-node:
         specifier: ^10.9.1
-        version: 10.9.2(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5)
+        version: 10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5)
       typescript:
         specifier: ^5.0.0
         version: 5.4.5
@@ -810,10 +754,10 @@ importers:
         version: link:../../../../packages/cdktn-cli
       jest:
         specifier: ^30.3.0
-        version: 30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0)(ts-node@10.9.2(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5))
+        version: 30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5))
       ts-node:
         specifier: ^10.9.1
-        version: 10.9.2(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5)
+        version: 10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5)
       typescript:
         specifier: ^5.0.0
         version: 5.4.5
@@ -838,10 +782,10 @@ importers:
         version: link:../../../../packages/cdktn-cli
       jest:
         specifier: ^30.3.0
-        version: 30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0)(ts-node@10.9.2(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5))
+        version: 30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5))
       ts-node:
         specifier: ^10.9.1
-        version: 10.9.2(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5)
+        version: 10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5)
       typescript:
         specifier: ^5.0.0
         version: 5.4.5
@@ -866,10 +810,10 @@ importers:
         version: link:../../../../packages/cdktn-cli
       jest:
         specifier: ^30.3.0
-        version: 30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0)(ts-node@10.9.2(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5))
+        version: 30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5))
       ts-node:
         specifier: ^10.9.1
-        version: 10.9.2(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5)
+        version: 10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5)
       typescript:
         specifier: ^5.0.0
         version: 5.4.5
@@ -895,31 +839,6 @@ importers:
       ts-node:
         specifier: 10.9.1
         version: 10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5)
-      typescript:
-        specifier: ^5.0.0
-        version: 5.4.5
-
-  examples/typescript/docker-bundling:
-    dependencies:
-      cdktn:
-        specifier: workspace:*
-        version: link:../../../packages/cdktn
-      constructs:
-        specifier: 10.6.0
-        version: 10.6.0
-    devDependencies:
-      '@types/jest':
-        specifier: 30.0.0
-        version: 30.0.0
-      '@types/node':
-        specifier: 20.17.51
-        version: 20.17.51
-      jest:
-        specifier: ^30.3.0
-        version: 30.3.0(@types/node@20.17.51)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5))
-      ts-node:
-        specifier: 10.9.1
-        version: 10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5)
       typescript:
         specifier: ^5.0.0
         version: 5.4.5
@@ -1687,7 +1606,7 @@ importers:
         version: 22.20.1
       ts-node:
         specifier: ^10.9.1
-        version: 10.9.2(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5)
+        version: 10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5)
       typescript:
         specifier: ^5.0.0
         version: 5.4.5
@@ -3797,9 +3716,6 @@ packages:
 
   '@types/ms@2.1.0':
     resolution: {integrity: sha512-GsCCIZDE/p3i96vtEqx+7dBUGXrc7zeSK3wwPHIaRThS+9OhWIXRqzs4d6k1SVU8g91DrNRWxWUGhp5KXQb2VA==}
-
-  '@types/node@20.17.51':
-    resolution: {integrity: sha512-hccptBl7C8lHiKxTBsY6vYYmqpmw1E/aGR/8fmueE+B390L3pdMOpNSRvFO4ZnXzW5+p2HBXV0yNABd2vdk22Q==}
 
   '@types/node@22.20.1':
     resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
@@ -7609,9 +7525,6 @@ packages:
     resolution: {integrity: sha512-FeFPZ/WFT0mbRCuydiZzpPFlrYN8ZUpphQKoq4EeElVIYjYyGzPMxQR/simUwCOJIyVhpFk4RbtyO7RuMpMnHA==}
     engines: {node: '>=14'}
 
-  undici-types@6.19.8:
-    resolution: {integrity: sha512-ve2KP6f/JnbPBFyobGHuerC9g1FYGn/F8n1LWTwNxCEzd6IfqTwUQcNXgEtmmQ6DlRrC1hrSrBnCZPokRrDHjw==}
-
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
@@ -9415,41 +9328,6 @@ snapshots:
       jest-util: 30.3.0
       slash: 3.0.0
 
-  '@jest/core@30.3.0(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5))':
-    dependencies:
-      '@jest/console': 30.3.0
-      '@jest/pattern': 30.0.1
-      '@jest/reporters': 30.3.0
-      '@jest/test-result': 30.3.0
-      '@jest/transform': 30.3.0
-      '@jest/types': 30.3.0
-      '@types/node': 22.20.1
-      ansi-escapes: 4.3.2
-      chalk: 4.1.2
-      ci-info: 4.4.0
-      exit-x: 0.2.2
-      graceful-fs: 4.2.11
-      jest-changed-files: 30.3.0
-      jest-config: 30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5))
-      jest-haste-map: 30.3.0
-      jest-message-util: 30.3.0
-      jest-regex-util: 30.0.1
-      jest-resolve: 30.3.0
-      jest-resolve-dependencies: 30.3.0
-      jest-runner: 30.3.0
-      jest-runtime: 30.3.0
-      jest-snapshot: 30.3.0
-      jest-util: 30.3.0
-      jest-validate: 30.3.0
-      jest-watcher: 30.3.0
-      pretty-format: 30.3.0
-      slash: 3.0.0
-    transitivePeerDependencies:
-      - babel-plugin-macros
-      - esbuild-register
-      - supports-color
-      - ts-node
-
   '@jest/core@30.3.0(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5))':
     dependencies:
       '@jest/console': 30.3.0
@@ -10361,10 +10239,6 @@ snapshots:
   '@types/minimist@1.2.5': {}
 
   '@types/ms@2.1.0': {}
-
-  '@types/node@20.17.51':
-    dependencies:
-      undici-types: 6.19.8
 
   '@types/node@22.20.1':
     dependencies:
@@ -12757,25 +12631,6 @@ snapshots:
       - babel-plugin-macros
       - supports-color
 
-  jest-cli@30.3.0(@types/node@20.17.51)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5)):
-    dependencies:
-      '@jest/core': 30.3.0(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5))
-      '@jest/test-result': 30.3.0
-      '@jest/types': 30.3.0
-      chalk: 4.1.2
-      exit-x: 0.2.2
-      import-local: 3.2.0
-      jest-config: 30.3.0(@types/node@20.17.51)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5))
-      jest-util: 30.3.0
-      jest-validate: 30.3.0
-      yargs: 17.7.3
-    transitivePeerDependencies:
-      - '@types/node'
-      - babel-plugin-macros
-      - esbuild-register
-      - supports-color
-      - ts-node
-
   jest-cli@30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5)):
     dependencies:
       '@jest/core': 30.3.0(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5))
@@ -12787,7 +12642,7 @@ snapshots:
       jest-config: 30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5))
       jest-util: 30.3.0
       jest-validate: 30.3.0
-      yargs: 17.7.3
+      yargs: 17.7.2
     transitivePeerDependencies:
       - '@types/node'
       - babel-plugin-macros
@@ -12806,77 +12661,13 @@ snapshots:
       jest-config: 30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0)(ts-node@10.9.2(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5))
       jest-util: 30.3.0
       jest-validate: 30.3.0
-      yargs: 17.7.3
+      yargs: 17.7.2
     transitivePeerDependencies:
       - '@types/node'
       - babel-plugin-macros
       - esbuild-register
       - supports-color
       - ts-node
-
-  jest-config@30.3.0(@types/node@20.17.51)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5)):
-    dependencies:
-      '@babel/core': 7.29.0
-      '@jest/get-type': 30.1.0
-      '@jest/pattern': 30.0.1
-      '@jest/test-sequencer': 30.3.0
-      '@jest/types': 30.3.0
-      babel-jest: 30.3.0(@babel/core@7.29.0)
-      chalk: 4.1.2
-      ci-info: 4.4.0
-      deepmerge: 4.3.1
-      glob: 10.5.0
-      graceful-fs: 4.2.11
-      jest-circus: 30.3.0(babel-plugin-macros@3.1.0)
-      jest-docblock: 30.2.0
-      jest-environment-node: 30.3.0
-      jest-regex-util: 30.0.1
-      jest-resolve: 30.3.0
-      jest-runner: 30.3.0
-      jest-util: 30.3.0
-      jest-validate: 30.3.0
-      parse-json: 5.2.0
-      pretty-format: 30.3.0
-      slash: 3.0.0
-      strip-json-comments: 3.1.1
-    optionalDependencies:
-      '@types/node': 20.17.51
-      ts-node: 10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5)
-    transitivePeerDependencies:
-      - babel-plugin-macros
-      - supports-color
-
-  jest-config@30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5)):
-    dependencies:
-      '@babel/core': 7.29.0
-      '@jest/get-type': 30.1.0
-      '@jest/pattern': 30.0.1
-      '@jest/test-sequencer': 30.3.0
-      '@jest/types': 30.3.0
-      babel-jest: 30.3.0(@babel/core@7.29.0)
-      chalk: 4.1.2
-      ci-info: 4.4.0
-      deepmerge: 4.3.1
-      glob: 10.5.0
-      graceful-fs: 4.2.11
-      jest-circus: 30.3.0(babel-plugin-macros@3.1.0)
-      jest-docblock: 30.2.0
-      jest-environment-node: 30.3.0
-      jest-regex-util: 30.0.1
-      jest-resolve: 30.3.0
-      jest-runner: 30.3.0
-      jest-util: 30.3.0
-      jest-validate: 30.3.0
-      parse-json: 5.2.0
-      pretty-format: 30.3.0
-      slash: 3.0.0
-      strip-json-comments: 3.1.1
-    optionalDependencies:
-      '@types/node': 22.20.1
-      ts-node: 10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5)
-    transitivePeerDependencies:
-      - babel-plugin-macros
-      - supports-color
 
   jest-config@30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5)):
     dependencies:
@@ -13158,19 +12949,6 @@ snapshots:
       jest-util: 30.3.0
       merge-stream: 2.0.0
       supports-color: 8.1.1
-
-  jest@30.3.0(@types/node@20.17.51)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5)):
-    dependencies:
-      '@jest/core': 30.3.0(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5))
-      '@jest/types': 30.3.0
-      import-local: 3.2.0
-      jest-cli: 30.3.0(@types/node@20.17.51)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5))
-    transitivePeerDependencies:
-      - '@types/node'
-      - babel-plugin-macros
-      - esbuild-register
-      - supports-color
-      - ts-node
 
   jest@30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0)(ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5)):
     dependencies:
@@ -15105,26 +14883,6 @@ snapshots:
       babel-jest: 30.3.0(@babel/core@7.29.0)
       jest-util: 30.3.0
 
-  ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@20.17.51)(typescript@5.4.5):
-    dependencies:
-      '@cspotcode/source-map-support': 0.8.1
-      '@tsconfig/node10': 1.0.11
-      '@tsconfig/node12': 1.0.11
-      '@tsconfig/node14': 1.0.3
-      '@tsconfig/node16': 1.0.4
-      '@types/node': 20.17.51
-      acorn: 8.16.0
-      acorn-walk: 8.3.4
-      arg: 4.1.3
-      create-require: 1.1.1
-      diff: 4.0.2
-      make-error: 1.3.6
-      typescript: 5.4.5
-      v8-compile-cache-lib: 3.0.1
-      yn: 3.1.1
-    optionalDependencies:
-      '@swc/core': 1.15.40(@swc/helpers@0.5.21)
-
   ts-node@10.9.1(@swc/core@1.15.40(@swc/helpers@0.5.21))(@types/node@22.20.1)(typescript@5.4.5):
     dependencies:
       '@cspotcode/source-map-support': 0.8.1
@@ -15164,6 +14922,7 @@ snapshots:
       yn: 3.1.1
     optionalDependencies:
       '@swc/core': 1.15.40(@swc/helpers@0.5.21)
+    optional: true
 
   tsc-files@1.1.4(typescript@5.4.5):
     dependencies:
@@ -15244,8 +15003,6 @@ snapshots:
     optional: true
 
   unbash@3.0.0: {}
-
-  undici-types@6.19.8: {}
 
   undici-types@6.21.0: {}
 
