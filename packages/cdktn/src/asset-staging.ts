@@ -8,6 +8,11 @@ import * as path from "path";
 import { Construct } from "constructs";
 import { AssetHashType, AssetOptions, FileAssetPackaging } from "./assets";
 import { BundlingOptions, BundlingOutput, runDockerBundling } from "./bundling";
+import {
+  bundlingOutputEmpty,
+  bundlingOutputNotArchived,
+  bundlingOutputNotSingleFile,
+} from "./errors";
 import { hashPath as fsHashPath } from "./private/fs";
 
 const ASSET_SALT_CONTEXT_KEY = "cdktn:assetHashSalt";
@@ -179,8 +184,13 @@ export class AssetStaging extends Construct {
       const bundledStat = fs.statSync(finalSourcePath);
 
       if (bundledStat.isDirectory()) {
-        // Check if it's a single archive file
         const files = fs.readdirSync(finalSourcePath);
+
+        // Validate empty output
+        if (files.length === 0) {
+          throw bundlingOutputEmpty(this.node.path, finalSourcePath);
+        }
+
         if (files.length === 1) {
           const singleFile = path.join(finalSourcePath, files[0]);
           const singleStat = fs.statSync(singleFile);
@@ -189,37 +199,82 @@ export class AssetStaging extends Construct {
             singleStat.isFile() &&
             this.isArchiveExtension(path.extname(files[0]))
           ) {
-            // Single archive file
+            // Single archive file found
+            if (bundlingOutputType === BundlingOutput.SINGLE_FILE) {
+              // SINGLE_FILE expects non-archive, but got archive - this is invalid
+              throw bundlingOutputNotSingleFile(
+                this.node.path,
+                finalSourcePath,
+                files.length,
+                files,
+              );
+            }
+
+            // Valid for AUTO_DISCOVER, ARCHIVED, NOT_ARCHIVED
             if (
               bundlingOutputType === BundlingOutput.AUTO_DISCOVER ||
               bundlingOutputType === BundlingOutput.ARCHIVED
             ) {
               this.packaging = FileAssetPackaging.FILE;
               this.isArchive = true;
-              // Use the archive file directly
               finalSourcePath = singleFile;
             } else {
+              // NOT_ARCHIVED: treat as directory to zip
               this.packaging = FileAssetPackaging.ZIP_DIRECTORY;
               this.isArchive = false;
             }
-          } else {
-            // Single non-archive file
+          } else if (singleStat.isFile()) {
+            // Single non-archive file found
+            if (bundlingOutputType === BundlingOutput.ARCHIVED) {
+              // ARCHIVED expects an archive, but got non-archive
+              throw bundlingOutputNotArchived(
+                this.node.path,
+                finalSourcePath,
+                files.length,
+                files,
+              );
+            }
+
             if (bundlingOutputType === BundlingOutput.SINGLE_FILE) {
               this.packaging = FileAssetPackaging.FILE;
               this.isArchive = false;
               finalSourcePath = singleFile;
             } else {
+              // AUTO_DISCOVER or NOT_ARCHIVED: zip it
               this.packaging = FileAssetPackaging.ZIP_DIRECTORY;
               this.isArchive = false;
             }
+          } else {
+            // Single directory or other non-file - always zip
+            this.packaging = FileAssetPackaging.ZIP_DIRECTORY;
+            this.isArchive = false;
           }
         } else {
-          // Multiple files - always zip
+          // Multiple files
+          if (bundlingOutputType === BundlingOutput.ARCHIVED) {
+            throw bundlingOutputNotArchived(
+              this.node.path,
+              finalSourcePath,
+              files.length,
+              files,
+            );
+          }
+
+          if (bundlingOutputType === BundlingOutput.SINGLE_FILE) {
+            throw bundlingOutputNotSingleFile(
+              this.node.path,
+              finalSourcePath,
+              files.length,
+              files,
+            );
+          }
+
+          // AUTO_DISCOVER or NOT_ARCHIVED: zip everything
           this.packaging = FileAssetPackaging.ZIP_DIRECTORY;
           this.isArchive = false;
         }
       } else {
-        // Single file output
+        // Single file output (bundling directly produced a file, not a directory)
         this.packaging = FileAssetPackaging.FILE;
         this.isArchive = this.isArchiveExtension(extension);
       }

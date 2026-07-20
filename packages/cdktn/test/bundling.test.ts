@@ -491,7 +491,7 @@ describe("bundling", () => {
         expect(asset.isArchive).toBe(true);
       });
 
-      test("handles ARCHIVED output with multiple files as ZIP_DIRECTORY", () => {
+      test("throws error when ARCHIVED output has multiple files", () => {
         const app = Testing.app();
         const stack = new TerraformStack(app, "test");
 
@@ -507,18 +507,19 @@ describe("bundling", () => {
           },
         };
 
-        const asset = new AssetStaging(stack, "Asset", {
-          sourcePath: testDir,
-          bundling: {
-            image: "alpine",
-            command: ["echo", "hello"],
-            outputType: BundlingOutput.ARCHIVED,
-            local: bundler,
-          },
-        });
-
-        expect(asset.packaging).toBe(FileAssetPackaging.ZIP_DIRECTORY);
-        expect(asset.isArchive).toBe(false);
+        expect(() => {
+          new AssetStaging(stack, "Asset", {
+            sourcePath: testDir,
+            bundling: {
+              image: "alpine",
+              command: ["echo", "hello"],
+              outputType: BundlingOutput.ARCHIVED,
+              local: bundler,
+            },
+          });
+        }).toThrow(
+          /expected BundlingOutput\.ARCHIVED but the bundling output directory.*contains 2 file\(s\)/,
+        );
       });
 
       test("handles SINGLE_FILE output type", () => {
@@ -550,13 +551,13 @@ describe("bundling", () => {
         expect(asset.isArchive).toBe(false);
       });
 
-      test("handles SINGLE_FILE output with multiple files as ZIP_DIRECTORY", () => {
+      test("throws error when SINGLE_FILE output has multiple files", () => {
         const app = Testing.app();
         const stack = new TerraformStack(app, "test");
 
         const testDir = path.join(tempDir, "source");
         fs.mkdirSync(testDir);
-        fs.writeFileSync(path.join(testDir, "file.txt"), "content");
+        fs.writeFileSync(path.join(tempDir, "file.txt"), "content");
 
         const bundler: ILocalBundling = {
           tryBundle(outputDir: string): boolean {
@@ -566,18 +567,85 @@ describe("bundling", () => {
           },
         };
 
-        const asset = new AssetStaging(stack, "Asset", {
-          sourcePath: testDir,
-          bundling: {
-            image: "alpine",
-            command: ["echo", "hello"],
-            outputType: BundlingOutput.SINGLE_FILE,
-            local: bundler,
-          },
-        });
+        expect(() => {
+          new AssetStaging(stack, "Asset", {
+            sourcePath: testDir,
+            bundling: {
+              image: "alpine",
+              command: ["echo", "hello"],
+              outputType: BundlingOutput.SINGLE_FILE,
+              local: bundler,
+            },
+          });
+        }).toThrow(
+          /expected BundlingOutput\.SINGLE_FILE but the bundling output directory.*contains 2 file\(s\)/,
+        );
+      });
 
-        expect(asset.packaging).toBe(FileAssetPackaging.ZIP_DIRECTORY);
-        expect(asset.isArchive).toBe(false);
+      test("throws error when ARCHIVED expects archive but gets non-archive", () => {
+        const app = Testing.app();
+        const stack = new TerraformStack(app, "test");
+
+        const testDir = path.join(tempDir, "source");
+        fs.mkdirSync(testDir);
+        fs.writeFileSync(path.join(testDir, "file.txt"), "content");
+
+        const bundler: ILocalBundling = {
+          tryBundle(outputDir: string): boolean {
+            fs.writeFileSync(
+              path.join(outputDir, "output.txt"),
+              "not an archive",
+            );
+            return true;
+          },
+        };
+
+        expect(() => {
+          new AssetStaging(stack, "Asset", {
+            sourcePath: testDir,
+            bundling: {
+              image: "alpine",
+              command: ["echo", "hello"],
+              outputType: BundlingOutput.ARCHIVED,
+              local: bundler,
+            },
+          });
+        }).toThrow(
+          /expected BundlingOutput\.ARCHIVED but the bundling output directory.*contains 1 file\(s\)/,
+        );
+      });
+
+      test("throws error when SINGLE_FILE gets archive file", () => {
+        const app = Testing.app();
+        const stack = new TerraformStack(app, "test");
+
+        const testDir = path.join(tempDir, "source");
+        fs.mkdirSync(testDir);
+        fs.writeFileSync(path.join(testDir, "file.txt"), "content");
+
+        const bundler: ILocalBundling = {
+          tryBundle(outputDir: string): boolean {
+            fs.writeFileSync(
+              path.join(outputDir, "output.zip"),
+              "archive content",
+            );
+            return true;
+          },
+        };
+
+        expect(() => {
+          new AssetStaging(stack, "Asset", {
+            sourcePath: testDir,
+            bundling: {
+              image: "alpine",
+              command: ["echo", "hello"],
+              outputType: BundlingOutput.SINGLE_FILE,
+              local: bundler,
+            },
+          });
+        }).toThrow(
+          /expected BundlingOutput\.SINGLE_FILE but the bundling output directory.*contains 1 file\(s\)/,
+        );
       });
     });
 
@@ -724,17 +792,16 @@ describe("bundling", () => {
           },
         };
 
-        const asset = new AssetStaging(stack, "Asset", {
-          sourcePath: testDir,
-          bundling: {
-            image: "alpine",
-            command: ["echo", "bundle"],
-            local: emptyBundler,
-          },
-        });
-
-        expect(asset).toBeDefined();
-        expect(asset.packaging).toBe(FileAssetPackaging.ZIP_DIRECTORY);
+        expect(() => {
+          new AssetStaging(stack, "Asset", {
+            sourcePath: testDir,
+            bundling: {
+              image: "alpine",
+              command: ["echo", "bundle"],
+              local: emptyBundler,
+            },
+          });
+        }).toThrow(/bundling output directory.*is empty/);
       });
     });
 

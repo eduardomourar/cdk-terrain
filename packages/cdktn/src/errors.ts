@@ -554,6 +554,31 @@ export const unknownProviderFeature = (feature: string) =>
     `Unknown provider-protocol feature "${feature}" passed to registerProviderFeatureUsage. This is an internal cdktn API intended to be called by generated provider bindings, not user code; if you did not call it directly, please file a bug report.`,
   );
 
+export const bundlingOutputNotArchived = (
+  id: string,
+  outputPath: string,
+  fileCount: number,
+  files: string[],
+) =>
+  new Error(
+    `AssetStaging ${id} expected BundlingOutput.ARCHIVED but the bundling output directory '${outputPath}' contains ${fileCount} file(s) instead of exactly one archive file (.zip, .jar, .tar, .tar.gz, .tgz).\n\nFiles found:\n${files.map((f) => `  - ${f}`).join("\n")}\n\nEither:\n  1. Adjust your bundling command to output a single archive file, or\n  2. Change outputType to BundlingOutput.NOT_ARCHIVED or BundlingOutput.AUTO_DISCOVER`,
+  );
+
+export const bundlingOutputNotSingleFile = (
+  id: string,
+  outputPath: string,
+  fileCount: number,
+  files: string[],
+) =>
+  new Error(
+    `AssetStaging ${id} expected BundlingOutput.SINGLE_FILE but the bundling output directory '${outputPath}' contains ${fileCount} file(s) instead of exactly one file.\n\nFiles found:\n${files.map((f) => `  - ${f}`).join("\n")}\n\nEither:\n  1. Adjust your bundling command to output a single file, or\n  2. Change outputType to BundlingOutput.NOT_ARCHIVED or BundlingOutput.AUTO_DISCOVER`,
+  );
+
+export const bundlingOutputEmpty = (id: string, outputPath: string) =>
+  new Error(
+    `AssetStaging ${id} bundling output directory '${outputPath}' is empty. The bundling command must produce at least one output file.`,
+  );
+
 export const terraformModuleHasChildren = (pathName: string) => {
   return new Error(
     `Trying to add children to a TerraformModule at '${pathName}'. TerraformModules cannot have children, if you want to group resources or constructs in general together please use the Constructs class instead. See https://cdktn.io/docs/concepts/constructs for more details.`,
