@@ -39,7 +39,8 @@ describe("AssetStaging", () => {
       });
 
       expect(asset.assetHash).toBeDefined();
-      expect(asset.assetHash).toHaveLength(64); // SHA256 hash
+      expect(asset.assetHash).toHaveLength(32); // MD5 hash (unified with TerraformAsset)
+      expect(asset.assetHash).toMatch(/^[A-F0-9]{32}$/); // Uppercase hex
       expect(asset.isArchive).toBe(false);
       expect(asset.packaging).toBe(FileAssetPackaging.FILE);
       expect(asset.sourcePath).toBe(testFile);
@@ -132,9 +133,8 @@ describe("AssetStaging", () => {
         assetHashType: AssetHashType.CUSTOM,
       });
 
-      // Custom hash should be normalized to SHA256
-      expect(asset.assetHash).toBeDefined();
-      expect(asset.assetHash).toHaveLength(64);
+      // Custom hash should be used verbatim (matches TerraformAsset behavior)
+      expect(asset.assetHash).toBe(customHash);
     });
 
     test("uses extraHash in hash calculation", () => {
@@ -394,15 +394,15 @@ describe("AssetStaging", () => {
       const testFile = path.join(tempDir, "test.txt");
       fs.writeFileSync(testFile, "content");
 
+      const customHash = "my-custom-version-v1.0.0";
       const asset = new AssetStaging(stack, "Asset", {
         sourcePath: testFile,
-        assetHash: "my-custom-version-v1.0.0",
+        assetHash: customHash,
         assetHashType: AssetHashType.CUSTOM,
       });
 
-      // Custom hash should be normalized to 64-char hex
-      expect(asset.assetHash).toBeDefined();
-      expect(asset.assetHash.length).toBe(64);
+      // Custom hash should be used verbatim (matches TerraformAsset behavior)
+      expect(asset.assetHash).toBe(customHash);
     });
 
     test("preserves valid SHA256 hash", () => {
@@ -725,7 +725,8 @@ describe("AssetStaging", () => {
 
       // Hash should be consistent regardless of path separators
       expect(asset.assetHash).toBeDefined();
-      expect(asset.assetHash.length).toBe(64);
+      expect(asset.assetHash).toHaveLength(32); // MD5 hash (unified with TerraformAsset)
+      expect(asset.assetHash).toMatch(/^[A-F0-9]{32}$/); // Uppercase hex
     });
   });
 

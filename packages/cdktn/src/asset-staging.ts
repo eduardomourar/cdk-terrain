@@ -8,6 +8,7 @@ import * as path from "path";
 import { Construct } from "constructs";
 import { AssetHashType, AssetOptions, FileAssetPackaging } from "./assets";
 import { BundlingOptions, BundlingOutput, runDockerBundling } from "./bundling";
+import { hashPath as fsHashPath } from "./private/fs";
 
 const ASSET_SALT_CONTEXT_KEY = "cdktn:assetHashSalt";
 
@@ -276,58 +277,165 @@ export class AssetStaging extends Construct {
     props: AssetStagingProps,
     sourcePath?: string,
   ): string {
-    const actualPath = sourcePath || this.sourcePath;
     if (hashType === AssetHashType.CUSTOM) {
-      // Normalize custom hash to SHA256
-      const customHash = props.assetHash!;
-      if (/^[a-f0-9]{64}$/i.test(customHash)) {
-        return customHash.toLowerCase();
-      }
-      return crypto.createHash("sha256").update(customHash).digest("hex");
+      // Use custom hash verbatim (matches TerraformAsset behavior)
+      return props.assetHash!;
     }
 
-    // SOURCE hash type - hash the content
-    const hash = crypto.createHash("sha256");
+    // For SOURCE hash, use the original source path (not the bundled output)
+    // For OUTPUT hash, use the bundled output path
+    const pathToHash =
+      hashType === AssetHashType.SOURCE
+        ? this.sourcePath
+        : sourcePath || this.sourcePath;
+
+    // Determine canonical mode from context (respects canonicalAssetHashes feature flag)
+    const canonical = !!this.node.tryGetContext("cdktn:canonicalAssetHashes");
+
+    // Determine if this is an archive for hash framing
+    const isArchive = this.packaging === FileAssetPackaging.ZIP_DIRECTORY;
+
+    // Use unified hashPath from fs.ts - respects canonicalAssetHashes flag
+    let baseHash: string;
+    const exclude = props.exclude || [];
+
+    if (exclude.length === 0) {
+      // No exclusions - use fsHashPath directly
+      baseHash = fsHashPath(pathToHash, { canonical, archive: isArchive });
+    } else {
+      // With exclusions - use inline walker with same algorithm
+      baseHash = this.hashPathWithExclusions(
+        pathToHash,
+        exclude,
+        canonical,
+        isArchive,
+      );
+    }
 
     // Add salt from context if present
     const salt = this.node.tryGetContext(ASSET_SALT_CONTEXT_KEY);
-    if (salt) hash.update(salt);
+    if (salt) {
+      const salted = crypto.createHash("md5");
+      salted.update(baseHash);
+      salted.update(salt);
+      return salted.digest("hex").slice(0, 32).toUpperCase();
+    }
 
     // Add extra hash if provided
-    if (props.extraHash) hash.update(props.extraHash);
-
-    // If bundling, include bundling config in hash
-    if (props.bundling) {
-      hash.update(JSON.stringify(props.bundling));
+    if (props.extraHash) {
+      const extra = crypto.createHash("md5");
+      extra.update(baseHash);
+      extra.update(props.extraHash);
+      return extra.digest("hex").slice(0, 32).toUpperCase();
     }
 
-    // Hash the file content
-    this.hashPath(actualPath, hash, props.exclude || []);
-
-    return hash.digest("hex");
+    return baseHash;
   }
 
-  private hashPath(filePath: string, hash: crypto.Hash, exclude: string[]) {
-    const stat = fs.statSync(filePath);
+  private hashPathWithExclusions(
+    sourcePath: string,
+    exclude: string[],
+    canonical: boolean,
+    isArchive: boolean,
+  ): string {
+    // With exclusions, filter the tree manually using the same algorithm as fs.ts
+    // This maintains exact compatibility with hashPath behavior
 
-    if (stat.isFile()) {
-      hash.update(fs.readFileSync(filePath));
-    } else if (stat.isDirectory()) {
-      const entries = fs.readdirSync(filePath).sort();
-
-      for (const entry of entries) {
-        const fullPath = path.join(filePath, entry);
-        const relativePath = path.relative(this.sourcePath, fullPath);
-
-        // Check exclusions
-        if (this.shouldExclude(relativePath, exclude)) {
-          continue;
-        }
-
-        hash.update(entry);
-        this.hashPath(fullPath, hash, exclude);
-      }
+    if (canonical) {
+      return this.canonicalHashWithExclusions(sourcePath, exclude, isArchive);
+    } else {
+      return this.legacyHashWithExclusions(sourcePath, exclude);
     }
+  }
+
+  private legacyHashWithExclusions(
+    sourcePath: string,
+    exclude: string[],
+  ): string {
+    const content = crypto.createHash("md5");
+    const links = crypto.createHash("md5");
+    let linkCount = 0;
+
+    const walk = (p: string, relPath: string, isRoot = false) => {
+      const stat = isRoot ? fs.statSync(p) : fs.lstatSync(p);
+
+      if (stat.isSymbolicLink()) {
+        links.update(`${relPath}\0${fs.readlinkSync(p)}\0`);
+        linkCount++;
+      } else if (stat.isFile()) {
+        content.update(fs.readFileSync(p));
+      } else if (stat.isDirectory()) {
+        for (const entry of fs.readdirSync(p).sort()) {
+          const fullPath = path.join(p, entry);
+          const entryRelPath = relPath ? `${relPath}/${entry}` : entry;
+
+          // Check if excluded
+          if (this.shouldExclude(entryRelPath, exclude)) {
+            continue;
+          }
+
+          walk(fullPath, entryRelPath);
+        }
+      }
+    };
+
+    walk(sourcePath, "", true);
+
+    let digest: string;
+    if (linkCount === 0) {
+      digest = content.digest("hex");
+    } else {
+      const outer = crypto.createHash("md5");
+      outer.update("cdktn/asset-hash/symlinks/v1\0");
+      outer.update(content.digest("hex"));
+      outer.update(links.digest("hex"));
+      digest = outer.digest("hex");
+    }
+
+    return digest.slice(0, 32).toUpperCase();
+  }
+
+  private canonicalHashWithExclusions(
+    sourcePath: string,
+    exclude: string[],
+    includeDirectories: boolean,
+  ): string {
+    const hash = crypto.createHash("md5");
+    const PERM_MASK = 0o7777;
+
+    const walk = (p: string, relPath: string, isRoot = false) => {
+      const stat = isRoot ? fs.statSync(p) : fs.lstatSync(p);
+      const mode = (stat.mode & PERM_MASK).toString(8);
+
+      if (stat.isSymbolicLink()) {
+        const target = fs.readlinkSync(p);
+        hash.update(`L ${mode} ${relPath}\0${Buffer.byteLength(target)}\0`);
+        hash.update(target);
+      } else if (stat.isFile()) {
+        const data = fs.readFileSync(p);
+        hash.update(`F ${mode} ${relPath}\0${data.length}\0`);
+        hash.update(data);
+      } else if (stat.isDirectory()) {
+        if (relPath && includeDirectories) {
+          hash.update(`D ${relPath}\0`);
+        }
+        for (const entry of fs.readdirSync(p).sort()) {
+          const fullPath = path.join(p, entry);
+          const entryRelPath = relPath ? `${relPath}/${entry}` : entry;
+
+          // Check if excluded
+          if (this.shouldExclude(entryRelPath, exclude)) {
+            continue;
+          }
+
+          walk(fullPath, entryRelPath);
+        }
+      }
+    };
+
+    walk(sourcePath, "", true);
+
+    return hash.digest("hex").slice(0, 32).toUpperCase();
   }
 
   private shouldExclude(relativePath: string, exclude: string[]): boolean {

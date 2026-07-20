@@ -252,9 +252,8 @@ describe("TerraformAsset Integration", () => {
         exclude: ["*.md"], // This triggers AssetStaging
       });
 
-      // Custom hash should be normalized via AssetStaging
-      expect(asset.assetHash).toBeDefined();
-      expect(asset.assetHash.length).toBe(64); // SHA256 hex length
+      // Custom hash should be used verbatim (unified behavior with AssetStaging)
+      expect(asset.assetHash).toBe(customHash);
     });
   });
 });

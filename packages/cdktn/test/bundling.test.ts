@@ -601,7 +601,8 @@ describe("bundling", () => {
         });
 
         expect(asset.assetHash).toBeDefined();
-        expect(asset.assetHash.length).toBe(64);
+        expect(asset.assetHash).toHaveLength(32); // MD5 hash (unified)
+        expect(asset.assetHash).toMatch(/^[A-F0-9]{32}$/); // Uppercase hex
         expect(fs.existsSync(asset.absoluteStagedPath)).toBe(true);
       });
 
@@ -651,7 +652,8 @@ describe("bundling", () => {
         });
 
         expect(asset.assetHash).toBeDefined();
-        expect(asset.assetHash.length).toBe(64);
+        expect(asset.assetHash).toHaveLength(32); // MD5 hash (unified)
+        expect(asset.assetHash).toMatch(/^[A-F0-9]{32}$/); // Uppercase hex
       });
     });
 
@@ -664,9 +666,10 @@ describe("bundling", () => {
         fs.mkdirSync(testDir);
         fs.writeFileSync(path.join(testDir, "file.txt"), "content");
 
+        const customHash = "my-custom-v1";
         const asset = new AssetStaging(stack, "Asset", {
           sourcePath: testDir,
-          assetHash: "my-custom-v1",
+          assetHash: customHash,
           assetHashType: AssetHashType.CUSTOM,
           bundling: {
             image: "alpine",
@@ -675,8 +678,8 @@ describe("bundling", () => {
           },
         });
 
-        expect(asset.assetHash).toBeDefined();
-        expect(asset.assetHash.length).toBe(64);
+        // Custom hash is used verbatim (unified behavior)
+        expect(asset.assetHash).toBe(customHash);
       });
     });
 
