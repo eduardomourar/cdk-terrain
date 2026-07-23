@@ -8,15 +8,19 @@ import * as path from "path";
 import { Construct } from "constructs";
 import { AssetHashType, AssetOptions, FileAssetPackaging } from "./assets";
 import {
+  BundlingFileAccess,
   BundlingOptions,
   BundlingOutput,
-  DockerVolumeConsistency,
 } from "./bundling";
 import {
   bundlingOutputEmpty,
   bundlingOutputNotArchived,
   bundlingOutputNotSingleFile,
 } from "./errors";
+import {
+  AssetBundlingBindMount,
+  AssetBundlingVolumeCopy,
+} from "./private/asset-staging";
 import { hashPath as fsHashPath } from "./private/fs";
 
 const ASSET_SALT_CONTEXT_KEY = "cdktn:assetHashSalt";
@@ -171,33 +175,22 @@ export class AssetStaging extends Construct {
         try {
           process.stderr.write(`Bundling asset ${this.node.path}...\n`);
 
-          // Use DockerImage.run() directly for bundling
-          props.bundling.image.run({
-            command: props.bundling.command,
-            entrypoint: props.bundling.entrypoint,
-            environment: props.bundling.environment,
-            workingDirectory:
-              props.bundling.workingDirectory ||
-              AssetStaging.BUNDLING_INPUT_DIR,
-            user: props.bundling.user,
-            network: props.bundling.network,
-            platform: props.bundling.platform,
-            securityOpt: props.bundling.securityOpt,
-            volumes: [
-              {
-                hostPath: this.sourcePath,
-                containerPath: AssetStaging.BUNDLING_INPUT_DIR,
-                consistency: DockerVolumeConsistency.DELEGATED,
-              },
-              {
-                hostPath: bundleDir,
-                containerPath: AssetStaging.BUNDLING_OUTPUT_DIR,
-                consistency: DockerVolumeConsistency.DELEGATED,
-              },
-              ...(props.bundling.volumes || []),
-            ],
-            volumesFrom: props.bundling.volumesFrom,
-          });
+          const fileAccess =
+            props.bundling.bundlingFileAccess ?? BundlingFileAccess.BIND_MOUNT;
+
+          if (fileAccess === BundlingFileAccess.VOLUME_COPY) {
+            new AssetBundlingVolumeCopy({
+              ...props.bundling,
+              sourcePath: this.sourcePath,
+              bundleDir,
+            }).run();
+          } else {
+            new AssetBundlingBindMount({
+              ...props.bundling,
+              sourcePath: this.sourcePath,
+              bundleDir,
+            }).run();
+          }
 
           finalSourcePath = bundleDir;
         } catch (err) {

@@ -237,7 +237,7 @@ describe("AssetStaging", () => {
       const linkPath = path.join(testDir, "link.txt");
       try {
         fs.symlinkSync(path.join(testDir, "real.txt"), linkPath);
-      } catch (e) {
+      } catch (_e) {
         // Skip test if symlinks are not supported (e.g., Windows without admin)
         return;
       }
@@ -590,7 +590,7 @@ describe("AssetStaging", () => {
       const symlinkDir = path.join(tempDir, "symlink-dir");
       try {
         fs.symlinkSync(realDir, symlinkDir);
-      } catch (e) {
+      } catch (_e) {
         // Skip test if symlinks are not supported
         return;
       }
@@ -698,7 +698,7 @@ describe("AssetStaging", () => {
       fs.writeFileSync(scriptFile, "#!/bin/bash\necho hello");
       try {
         fs.chmodSync(scriptFile, 0o755);
-      } catch (e) {
+      } catch (_e) {
         // Skip on Windows or if chmod fails
         return;
       }

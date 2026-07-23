@@ -22,7 +22,7 @@ interface AssetBundlingOptions extends BundlingOptions {
 }
 
 /**
- *
+ * Base class for asset bundling implementations
  */
 abstract class AssetBundlingBase {
   protected options: AssetBundlingOptions;
@@ -206,7 +206,9 @@ export class AssetBundlingVolumeCopy extends AssetBundlingBase {
 }
 
 /**
+ * Execute Docker CLI command
  *
+ * @internal
  */
 export function dockerExec(args: string[], options?: SpawnSyncOptions) {
   const prog = process.env.CDK_DOCKER ?? "docker";
@@ -240,7 +242,7 @@ export function dockerExec(args: string[], options?: SpawnSyncOptions) {
     ].join(" ");
 
     /**
-     *
+     * Helper to prepend a label to each line of text
      */
     function prependLines(
       firstLine: string,

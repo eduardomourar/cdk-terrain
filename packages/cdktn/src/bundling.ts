@@ -3,7 +3,9 @@
 // Simplified Docker bundling - following AWS CDK patterns
 
 import * as crypto from "crypto";
+import * as fs from "fs";
 import * as path from "path";
+import * as os from "os";
 import { dockerExec } from "./private/asset-staging";
 
 /**
@@ -102,6 +104,22 @@ export interface BundlingOptions {
   readonly outputType?: BundlingOutput;
 
   /**
+   * The access mechanism used to make source files available to the bundling
+   * container and to return the bundling output back to the host.
+   *
+   * BIND_MOUNT mounts the source and output directories directly into the container.
+   * This is faster and simpler, but requires the Docker daemon to have access to the
+   * host filesystem.
+   *
+   * VOLUME_COPY creates temporary Docker volumes and containers to copy files to/from
+   * the bundling container. This is slower, but works in more complex situations
+   * (e.g., remote or shared Docker sockets, Docker-in-Docker, etc.).
+   *
+   * @default BundlingFileAccess.BIND_MOUNT
+   */
+  readonly bundlingFileAccess?: BundlingFileAccess;
+
+  /**
    * Local bundling provider.
    *
    * If provided, this will be tried first before Docker bundling.
@@ -139,6 +157,25 @@ export enum BundlingOutput {
    * Similar to ARCHIVED but for non-archive files.
    */
   SINGLE_FILE = "single-file",
+}
+
+/**
+ * The access mechanism used to make source files available to the bundling
+ * container and to return the bundling output back to the host.
+ */
+export enum BundlingFileAccess {
+  /**
+   * Creates temporary volumes and containers to copy files from the host to
+   * the bundling container and back. This is slower, but works also in more
+   * complex situations with remote or shared docker sockets.
+   */
+  VOLUME_COPY = "VOLUME_COPY",
+
+  /**
+   * The source and output folders will be mounted as bind mount from the host
+   * system. This is faster and simpler, but less portable than `VOLUME_COPY`.
+   */
+  BIND_MOUNT = "BIND_MOUNT",
 }
 
 /**
@@ -419,10 +456,10 @@ export class DockerImage {
   }
 
   private createTempDir(): string {
-    const tmpDir = require("os").tmpdir();
+    const tmpDir = os.tmpdir();
     const random = crypto.randomBytes(6).toString("hex");
     const dir = path.join(tmpDir, `cdktn-docker-cp-${random}`);
-    require("fs").mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true });
     return dir;
   }
 }

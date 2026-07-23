@@ -22,8 +22,6 @@ import {
 
 jest.mock("child_process");
 
-const dockerCmd = process.env.CDK_DOCKER ?? "docker";
-
 // Mock local bundler for integration tests
 class MockLocalBundler implements ILocalBundling {
   constructor(
