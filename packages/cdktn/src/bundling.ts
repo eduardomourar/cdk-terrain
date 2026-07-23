@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: MPL-2.0
 // Simplified Docker bundling - following AWS CDK patterns
 
-import { spawnSync } from "child_process";
+import * as crypto from "crypto";
+import * as path from "path";
+import { dockerExec } from "./private/asset-staging";
 
 /**
  * Bundling options for Docker-based builds
@@ -11,10 +13,11 @@ export interface BundlingOptions {
   /**
    * The Docker image where the command will run.
    *
-   * @example 'node:18-alpine'
-   * @example 'public.ecr.aws/lambda/python:3.11'
+   * @example DockerImage.fromRegistry('node:18-alpine')
+   * @example DockerImage.fromRegistry('public.ecr.aws/lambda/python:3.11')
+   * @example DockerImage.fromBuild('./docker')
    */
-  readonly image: string;
+  readonly image: DockerImage;
 
   /**
    * The command to run in the Docker container.
@@ -78,6 +81,20 @@ export interface BundlingOptions {
   readonly securityOpt?: string;
 
   /**
+   * Additional Docker volumes to mount.
+   *
+   * @default - no additional volumes
+   */
+  readonly volumes?: DockerVolume[];
+
+  /**
+   * Mount volumes from other containers.
+   *
+   * @default - no volumes from other containers
+   */
+  readonly volumesFrom?: string[];
+
+  /**
    * The type of output that this bundling operation is producing.
    *
    * @default BundlingOutput.AUTO_DISCOVER
@@ -139,100 +156,273 @@ export interface ILocalBundling {
 }
 
 /**
- * Runs Docker commands
+ * A Docker volume mount configuration
  */
-export function dockerExec(
-  args: string[],
-  options?: { quiet?: boolean },
-): { stdout: Buffer; stderr: Buffer } {
-  const result = spawnSync("docker", args, {
-    stdio: options?.quiet
-      ? ["ignore", "pipe", "pipe"]
-      : ["ignore", "inherit", "pipe"],
-    encoding: "buffer",
-  });
+export interface DockerVolume {
+  /**
+   * Path on the host machine
+   */
+  readonly hostPath: string;
 
-  if (result.error) {
-    throw new Error(`Failed to run docker command: ${result.error.message}`);
-  }
+  /**
+   * Path in the container
+   */
+  readonly containerPath: string;
 
-  if (result.status !== 0) {
-    const stderr = result.stderr.toString();
-    throw new Error(
-      `Docker command failed with exit code ${result.status}: ${stderr}`,
-    );
-  }
-
-  return {
-    stdout: result.stdout || Buffer.from(""),
-    stderr: result.stderr || Buffer.from(""),
-  };
+  /**
+   * Mount consistency (macOS only)
+   * @default DELEGATED
+   */
+  readonly consistency?: DockerVolumeConsistency;
 }
 
 /**
- * Run Docker bundling
+ * Docker volume consistency types (macOS optimization)
  */
-export function runDockerBundling(
-  inputDir: string,
-  outputDir: string,
-  options: BundlingOptions,
-): void {
-  const dockerArgs: string[] = ["run", "--rm"];
+export enum DockerVolumeConsistency {
+  /**
+   * Full consistency - slowest, most consistent
+   */
+  CONSISTENT = "consistent",
 
-  // Mount input directory (read-only)
-  dockerArgs.push("-v", `${inputDir}:/asset-input:ro`);
+  /**
+   * Delegated consistency - fast, eventual consistency
+   */
+  DELEGATED = "delegated",
 
-  // Mount output directory (read-write)
-  dockerArgs.push("-v", `${outputDir}:/asset-output:rw`);
+  /**
+   * Cached consistency - read-optimized
+   */
+  CACHED = "cached",
+}
 
-  // Working directory
-  const workdir = options.workingDirectory || "/asset-input";
-  dockerArgs.push("-w", workdir);
+/**
+ * Options for running a Docker container
+ */
+export interface DockerRunOptions {
+  /**
+   * Container entrypoint override
+   */
+  readonly entrypoint?: string[];
 
-  // Environment variables
-  if (options.environment) {
-    for (const [key, value] of Object.entries(options.environment)) {
-      dockerArgs.push("-e", `${key}=${value}`);
+  /**
+   * Command to run in container
+   */
+  readonly command?: string[];
+
+  /**
+   * Volume mounts
+   */
+  readonly volumes?: DockerVolume[];
+
+  /**
+   * Mount volumes from other containers
+   */
+  readonly volumesFrom?: string[];
+
+  /**
+   * Environment variables
+   */
+  readonly environment?: Record<string, string>;
+
+  /**
+   * Working directory in container
+   */
+  readonly workingDirectory?: string;
+
+  /**
+   * User to run as (uid:gid)
+   */
+  readonly user?: string;
+
+  /**
+   * Security options
+   */
+  readonly securityOpt?: string;
+
+  /**
+   * Network mode
+   */
+  readonly network?: string;
+
+  /**
+   * Platform (e.g., linux/amd64)
+   */
+  readonly platform?: string;
+}
+
+/**
+ * Options for building a Docker image
+ */
+export interface DockerBuildOptions {
+  /**
+   * Build arguments
+   */
+  readonly buildArgs?: Record<string, string>;
+
+  /**
+   * Dockerfile name (relative to context)
+   * @default Dockerfile
+   */
+  readonly file?: string;
+
+  /**
+   * Platform to build for
+   */
+  readonly platform?: string;
+
+  /**
+   * Build target stage
+   */
+  readonly targetStage?: string;
+
+  /**
+   * Disable build cache
+   * @default false
+   */
+  readonly cacheDisabled?: boolean;
+}
+
+/**
+ * A Docker image reference for bundling operations
+ */
+export class DockerImage {
+  /**
+   * Reference an image from a registry
+   *
+   * @param image Image name (e.g., "node:18", "public.ecr.aws/lambda/python:3.11")
+   */
+  public static fromRegistry(image: string): DockerImage {
+    return new DockerImage(image);
+  }
+
+  /**
+   * Build an image from a Dockerfile
+   *
+   * @param contextPath Path to directory containing Dockerfile
+   * @param options Build options
+   */
+  public static fromBuild(
+    contextPath: string,
+    options: DockerBuildOptions = {},
+  ): DockerImage {
+    if (options.file && path.isAbsolute(options.file)) {
+      throw new Error(
+        `Dockerfile path must be relative to context. Got: ${options.file}`,
+      );
+    }
+
+    // Create stable tag based on context and options
+    const input = JSON.stringify({ path: contextPath, ...options });
+    const hash = crypto.createHash("sha256").update(input).digest("hex");
+    const tag = `cdktn-${hash}`;
+
+    // Build the image
+    const buildArgs: string[] = [
+      "build",
+      "-t",
+      tag,
+      ...(options.file ? ["-f", path.join(contextPath, options.file)] : []),
+      ...(options.platform ? ["--platform", options.platform] : []),
+      ...(options.targetStage ? ["--target", options.targetStage] : []),
+      ...(options.cacheDisabled ? ["--no-cache"] : []),
+      ...Object.entries(options.buildArgs || {}).flatMap(([k, v]) => [
+        "--build-arg",
+        `${k}=${v}`,
+      ]),
+      contextPath,
+    ];
+
+    dockerExec(buildArgs);
+
+    return new DockerImage(tag, hash);
+  }
+
+  constructor(
+    /**
+     * The image name/tag
+     */
+    public readonly image: string,
+    /**
+     * Optional stable hash for the image
+     */
+    private readonly _hash?: string,
+  ) {}
+
+  /**
+   * Run a command in this Docker image
+   *
+   * @param options Run options
+   */
+  public run(options: DockerRunOptions = {}): void {
+    const args = [
+      "run",
+      "--rm",
+      ...(options.securityOpt ? ["--security-opt", options.securityOpt] : []),
+      ...(options.network ? ["--network", options.network] : []),
+      ...(options.platform ? ["--platform", options.platform] : []),
+      ...(options.user ? ["-u", options.user] : []),
+      ...(options.volumesFrom?.flatMap((v) => ["--volumes-from", v]) || []),
+      ...(options.volumes?.flatMap((v) => [
+        "-v",
+        `${v.hostPath}:${v.containerPath}:${v.consistency || DockerVolumeConsistency.DELEGATED}`,
+      ]) || []),
+      ...(Object.entries(options.environment || {}).flatMap(([k, v]) => [
+        "--env",
+        `${k}=${v}`,
+      ]) || []),
+      ...(options.workingDirectory ? ["-w", options.workingDirectory] : []),
+      ...(options.entrypoint ? ["--entrypoint", options.entrypoint[0]] : []),
+      this.image,
+      ...(options.entrypoint ? options.entrypoint.slice(1) : []),
+      ...(options.command || []),
+    ];
+
+    dockerExec(args);
+  }
+
+  /**
+   * Copy a file or directory from the image to the host
+   *
+   * @param imagePath Path in the image
+   * @param outputPath Path on host (creates temp dir if not specified)
+   * @returns The output path
+   */
+  public cp(imagePath: string, outputPath?: string): string {
+    // Create temporary container
+    const result = dockerExec(["create", this.image], { stdio: "pipe" });
+    const containerId = result.stdout.toString().trim();
+
+    if (!containerId) {
+      throw new Error("Failed to create temporary container");
+    }
+
+    try {
+      // Determine output path
+      const destPath = outputPath || this.createTempDir();
+
+      // Copy files from container
+      dockerExec(["cp", `${containerId}:${imagePath}`, destPath]);
+
+      return destPath;
+    } finally {
+      // Clean up container
+      dockerExec(["rm", "-v", containerId]);
     }
   }
 
-  // User
-  if (options.user) {
-    dockerArgs.push("--user", options.user);
+  /**
+   * Get a stable representation of this image for serialization
+   */
+  public toJSON(): string {
+    return this._hash || this.image;
   }
 
-  // Network
-  if (options.network) {
-    dockerArgs.push("--network", options.network);
+  private createTempDir(): string {
+    const tmpDir = require("os").tmpdir();
+    const random = crypto.randomBytes(6).toString("hex");
+    const dir = path.join(tmpDir, `cdktn-docker-cp-${random}`);
+    require("fs").mkdirSync(dir, { recursive: true });
+    return dir;
   }
-
-  // Platform
-  if (options.platform) {
-    dockerArgs.push("--platform", options.platform);
-  }
-
-  // Security options
-  if (options.securityOpt) {
-    dockerArgs.push("--security-opt", options.securityOpt);
-  }
-
-  // Entrypoint (must come before image)
-  if (options.entrypoint && options.entrypoint.length > 0) {
-    dockerArgs.push("--entrypoint", options.entrypoint[0]);
-  }
-
-  // Image
-  dockerArgs.push(options.image);
-
-  // Entrypoint args (after image) + Command
-  if (options.entrypoint && options.entrypoint.length > 1) {
-    dockerArgs.push(...options.entrypoint.slice(1));
-  }
-
-  // Command
-  if (options.command) {
-    dockerArgs.push(...options.command);
-  }
-
-  dockerExec(dockerArgs);
 }

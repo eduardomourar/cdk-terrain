@@ -7,7 +7,11 @@ import * as fs from "fs";
 import * as path from "path";
 import { Construct } from "constructs";
 import { AssetHashType, AssetOptions, FileAssetPackaging } from "./assets";
-import { BundlingOptions, BundlingOutput, runDockerBundling } from "./bundling";
+import {
+  BundlingOptions,
+  BundlingOutput,
+  DockerVolumeConsistency,
+} from "./bundling";
 import {
   bundlingOutputEmpty,
   bundlingOutputNotArchived,
@@ -63,6 +67,16 @@ export interface AssetStagingProps extends AssetOptions {
  * means that only if content was changed, copy will happen.
  */
 export class AssetStaging extends Construct {
+  /**
+   * The path in the container where the asset source will be mounted.
+   */
+  public static readonly BUNDLING_INPUT_DIR = "/asset-input";
+
+  /**
+   * The path in the container where the bundled output should be written.
+   */
+  public static readonly BUNDLING_OUTPUT_DIR = "/asset-output";
+
   /**
    * Absolute path to the asset data after staging.
    */
@@ -156,7 +170,35 @@ export class AssetStaging extends Construct {
 
         try {
           process.stderr.write(`Bundling asset ${this.node.path}...\n`);
-          runDockerBundling(this.sourcePath, bundleDir, props.bundling);
+
+          // Use DockerImage.run() directly for bundling
+          props.bundling.image.run({
+            command: props.bundling.command,
+            entrypoint: props.bundling.entrypoint,
+            environment: props.bundling.environment,
+            workingDirectory:
+              props.bundling.workingDirectory ||
+              AssetStaging.BUNDLING_INPUT_DIR,
+            user: props.bundling.user,
+            network: props.bundling.network,
+            platform: props.bundling.platform,
+            securityOpt: props.bundling.securityOpt,
+            volumes: [
+              {
+                hostPath: this.sourcePath,
+                containerPath: AssetStaging.BUNDLING_INPUT_DIR,
+                consistency: DockerVolumeConsistency.DELEGATED,
+              },
+              {
+                hostPath: bundleDir,
+                containerPath: AssetStaging.BUNDLING_OUTPUT_DIR,
+                consistency: DockerVolumeConsistency.DELEGATED,
+              },
+              ...(props.bundling.volumes || []),
+            ],
+            volumesFrom: props.bundling.volumesFrom,
+          });
+
           finalSourcePath = bundleDir;
         } catch (err) {
           fs.rmSync(bundleDir, { recursive: true, force: true });

@@ -8,8 +8,7 @@ import * as path from "path";
 import * as os from "os";
 import {
   BundlingOutput,
-  runDockerBundling,
-  dockerExec,
+  DockerImage,
   type ILocalBundling,
   type BundlingOptions,
 } from "../lib/bundling";
@@ -48,60 +47,7 @@ describe("bundling", () => {
     jest.restoreAllMocks();
   });
 
-  describe("dockerExec", () => {
-    test("runs docker command successfully", () => {
-      (spawnSync as jest.Mock).mockReturnValue({
-        status: 0,
-        stdout: Buffer.from("success"),
-        stderr: Buffer.from(""),
-      });
-
-      const result = dockerExec(["version"]);
-
-      expect(spawnSync).toHaveBeenCalledWith("docker", ["version"], {
-        stdio: ["ignore", "inherit", "pipe"],
-        encoding: "buffer",
-      });
-      expect(result.stdout.toString()).toBe("success");
-    });
-
-    test("throws when docker command fails", () => {
-      (spawnSync as jest.Mock).mockReturnValue({
-        status: 1,
-        stderr: Buffer.from("docker error"),
-      });
-
-      expect(() => dockerExec(["invalid"])).toThrow(
-        /Docker command failed with exit code 1/,
-      );
-    });
-
-    test("throws when docker command has spawn error", () => {
-      (spawnSync as jest.Mock).mockReturnValue({
-        status: 0,
-        error: new Error("spawn error"),
-      });
-
-      expect(() => dockerExec(["run"])).toThrow(/Failed to run docker command/);
-    });
-
-    test("runs with quiet option", () => {
-      (spawnSync as jest.Mock).mockReturnValue({
-        status: 0,
-        stdout: Buffer.from(""),
-        stderr: Buffer.from(""),
-      });
-
-      dockerExec(["version"], { quiet: true });
-
-      expect(spawnSync).toHaveBeenCalledWith("docker", ["version"], {
-        stdio: ["ignore", "pipe", "pipe"],
-        encoding: "buffer",
-      });
-    });
-  });
-
-  describe("runDockerBundling", () => {
+  describe("DockerImage", () => {
     beforeEach(() => {
       (spawnSync as jest.Mock).mockReturnValue({
         status: 0,
@@ -110,141 +56,44 @@ describe("bundling", () => {
       });
     });
 
-    test("mounts input and output directories", () => {
-      runDockerBundling("/input", "/output", {
-        image: "alpine",
-      });
+    test("fromRegistry creates image reference", () => {
+      const image = DockerImage.fromRegistry("node:18");
+      expect(image.image).toBe("node:18");
+    });
 
+    test("fromBuild creates image with hash-based tag", () => {
+      const image = DockerImage.fromBuild("/path/to/context");
+      expect(image.image).toMatch(/^cdktn-[a-f0-9]{64}$/);
       expect(spawnSync).toHaveBeenCalledWith(
-        dockerCmd,
+        "docker",
         expect.arrayContaining([
-          "run",
-          "--rm",
-          "-v",
-          "/input:/asset-input:ro",
-          "-v",
-          "/output:/asset-output:rw",
-          "-w",
-          "/asset-input",
-          "alpine",
+          "build",
+          "-t",
+          expect.any(String),
+          "/path/to/context",
         ]),
         expect.any(Object),
       );
     });
 
-    test("passes through command", () => {
-      runDockerBundling("/input", "/output", {
-        image: "node:18",
-        command: ["npm", "install"],
-      });
-
-      expect(spawnSync).toHaveBeenCalledWith(
-        dockerCmd,
-        expect.arrayContaining(["node:18", "npm", "install"]),
-        expect.any(Object),
-      );
-    });
-
-    test("sets working directory", () => {
-      runDockerBundling("/input", "/output", {
-        image: "alpine",
-        workingDirectory: "/custom-dir",
-      });
-
-      expect(spawnSync).toHaveBeenCalledWith(
-        dockerCmd,
-        expect.arrayContaining(["-w", "/custom-dir"]),
-        expect.any(Object),
-      );
-    });
-
-    test("passes environment variables", () => {
-      runDockerBundling("/input", "/output", {
-        image: "alpine",
-        environment: {
-          NODE_ENV: "production",
-          API_KEY: "secret",
-        },
-      });
-
-      expect(spawnSync).toHaveBeenCalledWith(
-        dockerCmd,
-        expect.arrayContaining([
-          "-e",
-          "NODE_ENV=production",
-          "-e",
-          "API_KEY=secret",
-        ]),
-        expect.any(Object),
-      );
-    });
-
-    test("sets user", () => {
-      runDockerBundling("/input", "/output", {
-        image: "alpine",
+    test("run executes docker run with options", () => {
+      const image = DockerImage.fromRegistry("alpine");
+      image.run({
+        command: ["echo", "hello"],
+        environment: { TEST: "value" },
         user: "1000:1000",
       });
 
       expect(spawnSync).toHaveBeenCalledWith(
-        dockerCmd,
-        expect.arrayContaining(["--user", "1000:1000"]),
-        expect.any(Object),
-      );
-    });
-
-    test("sets network", () => {
-      runDockerBundling("/input", "/output", {
-        image: "alpine",
-        network: "host",
-      });
-
-      expect(spawnSync).toHaveBeenCalledWith(
-        dockerCmd,
-        expect.arrayContaining(["--network", "host"]),
-        expect.any(Object),
-      );
-    });
-
-    test("sets platform", () => {
-      runDockerBundling("/input", "/output", {
-        image: "alpine",
-        platform: "linux/amd64",
-      });
-
-      expect(spawnSync).toHaveBeenCalledWith(
-        dockerCmd,
-        expect.arrayContaining(["--platform", "linux/amd64"]),
-        expect.any(Object),
-      );
-    });
-
-    test("sets security opt", () => {
-      runDockerBundling("/input", "/output", {
-        image: "alpine",
-        securityOpt: "no-new-privileges",
-      });
-
-      expect(spawnSync).toHaveBeenCalledWith(
-        dockerCmd,
-        expect.arrayContaining(["--security-opt", "no-new-privileges"]),
-        expect.any(Object),
-      );
-    });
-
-    test("handles entrypoint correctly", () => {
-      runDockerBundling("/input", "/output", {
-        image: "alpine",
-        entrypoint: ["/bin/sh", "-c"],
-        command: ["echo", "hello"],
-      });
-
-      expect(spawnSync).toHaveBeenCalledWith(
-        dockerCmd,
+        "docker",
         expect.arrayContaining([
-          "--entrypoint",
-          "/bin/sh",
+          "run",
+          "--rm",
+          "-u",
+          "1000:1000",
+          "--env",
+          "TEST=value",
           "alpine",
-          "-c",
           "echo",
           "hello",
         ]),
@@ -252,15 +101,15 @@ describe("bundling", () => {
       );
     });
 
-    test("entrypoint with single element", () => {
-      runDockerBundling("/input", "/output", {
-        image: "alpine",
-        entrypoint: ["/bin/sh"],
+    test("run handles volumes correctly", () => {
+      const image = DockerImage.fromRegistry("alpine");
+      image.run({
+        volumes: [{ hostPath: "/host", containerPath: "/container" }],
       });
 
       expect(spawnSync).toHaveBeenCalledWith(
-        dockerCmd,
-        expect.arrayContaining(["--entrypoint", "/bin/sh", "alpine"]),
+        "docker",
+        expect.arrayContaining(["-v", "/host:/container:delegated"]),
         expect.any(Object),
       );
     });
@@ -303,7 +152,7 @@ describe("bundling", () => {
         const asset = new AssetStaging(stack, "Asset", {
           sourcePath: testDir,
           bundling: {
-            image: "node:18",
+            image: DockerImage.fromRegistry("node:18"),
             command: ["echo", "should not run"],
             local: bundler,
           },
@@ -328,7 +177,7 @@ describe("bundling", () => {
           const asset = new AssetStaging(stack, "Asset", {
             sourcePath: testDir,
             bundling: {
-              image: "node:18",
+              image: DockerImage.fromRegistry("node:18"),
               command: ["echo", "docker would run"],
               local: bundler,
             },
@@ -359,7 +208,7 @@ describe("bundling", () => {
         };
 
         const bundlingOptions: BundlingOptions = {
-          image: "alpine",
+          image: DockerImage.fromRegistry("alpine"),
           command: ["/bin/sh", "-c", "echo hello"],
           environment: {
             NODE_ENV: "production",
@@ -377,7 +226,7 @@ describe("bundling", () => {
         });
 
         expect(receivedOptions).toBeDefined();
-        expect(receivedOptions?.image).toBe("alpine");
+        expect(receivedOptions?.image.image).toBe("alpine");
         expect(receivedOptions?.environment?.NODE_ENV).toBe("production");
       });
 
@@ -392,7 +241,7 @@ describe("bundling", () => {
           new AssetStaging(stack, "Asset", {
             sourcePath: testFile,
             bundling: {
-              image: "alpine",
+              image: DockerImage.fromRegistry("alpine"),
               command: ["echo", "hello"],
             },
           });
@@ -419,7 +268,7 @@ describe("bundling", () => {
         const asset = new AssetStaging(stack, "Asset", {
           sourcePath: testDir,
           bundling: {
-            image: "alpine",
+            image: DockerImage.fromRegistry("alpine"),
             command: ["echo", "hello"],
             outputType: BundlingOutput.AUTO_DISCOVER,
             local: bundler,
@@ -448,7 +297,7 @@ describe("bundling", () => {
         const asset = new AssetStaging(stack, "Asset", {
           sourcePath: testDir,
           bundling: {
-            image: "alpine",
+            image: DockerImage.fromRegistry("alpine"),
             command: ["echo", "hello"],
             outputType: BundlingOutput.NOT_ARCHIVED,
             local: bundler,
@@ -480,7 +329,7 @@ describe("bundling", () => {
         const asset = new AssetStaging(stack, "Asset", {
           sourcePath: testDir,
           bundling: {
-            image: "alpine",
+            image: DockerImage.fromRegistry("alpine"),
             command: ["echo", "hello"],
             outputType: BundlingOutput.ARCHIVED,
             local: bundler,
@@ -511,7 +360,7 @@ describe("bundling", () => {
           new AssetStaging(stack, "Asset", {
             sourcePath: testDir,
             bundling: {
-              image: "alpine",
+              image: DockerImage.fromRegistry("alpine"),
               command: ["echo", "hello"],
               outputType: BundlingOutput.ARCHIVED,
               local: bundler,
@@ -540,7 +389,7 @@ describe("bundling", () => {
         const asset = new AssetStaging(stack, "Asset", {
           sourcePath: testDir,
           bundling: {
-            image: "alpine",
+            image: DockerImage.fromRegistry("alpine"),
             command: ["echo", "hello"],
             outputType: BundlingOutput.SINGLE_FILE,
             local: bundler,
@@ -571,7 +420,7 @@ describe("bundling", () => {
           new AssetStaging(stack, "Asset", {
             sourcePath: testDir,
             bundling: {
-              image: "alpine",
+              image: DockerImage.fromRegistry("alpine"),
               command: ["echo", "hello"],
               outputType: BundlingOutput.SINGLE_FILE,
               local: bundler,
@@ -604,7 +453,7 @@ describe("bundling", () => {
           new AssetStaging(stack, "Asset", {
             sourcePath: testDir,
             bundling: {
-              image: "alpine",
+              image: DockerImage.fromRegistry("alpine"),
               command: ["echo", "hello"],
               outputType: BundlingOutput.ARCHIVED,
               local: bundler,
@@ -637,7 +486,7 @@ describe("bundling", () => {
           new AssetStaging(stack, "Asset", {
             sourcePath: testDir,
             bundling: {
-              image: "alpine",
+              image: DockerImage.fromRegistry("alpine"),
               command: ["echo", "hello"],
               outputType: BundlingOutput.SINGLE_FILE,
               local: bundler,
@@ -662,7 +511,7 @@ describe("bundling", () => {
           sourcePath: testDir,
           assetHashType: AssetHashType.SOURCE,
           bundling: {
-            image: "node:18",
+            image: DockerImage.fromRegistry("node:18"),
             command: ["echo", "bundle"],
             local: new MockLocalBundler(true, "output"),
           },
@@ -686,7 +535,7 @@ describe("bundling", () => {
           sourcePath: testDir,
           assetHashType: AssetHashType.OUTPUT,
           bundling: {
-            image: "alpine",
+            image: DockerImage.fromRegistry("alpine"),
             command: ["echo", "bundle"],
             local: new MockLocalBundler(true, "output v1"),
           },
@@ -696,7 +545,7 @@ describe("bundling", () => {
           sourcePath: testDir,
           assetHashType: AssetHashType.OUTPUT,
           bundling: {
-            image: "alpine",
+            image: DockerImage.fromRegistry("alpine"),
             command: ["echo", "bundle"],
             local: new MockLocalBundler(true, "output v2"),
           },
@@ -740,7 +589,7 @@ describe("bundling", () => {
           assetHash: customHash,
           assetHashType: AssetHashType.CUSTOM,
           bundling: {
-            image: "alpine",
+            image: DockerImage.fromRegistry("alpine"),
             command: ["echo", "bundle"],
             local: new MockLocalBundler(),
           },
@@ -770,7 +619,7 @@ describe("bundling", () => {
           new AssetStaging(stack, "Asset", {
             sourcePath: testDir,
             bundling: {
-              image: "alpine",
+              image: DockerImage.fromRegistry("alpine"),
               command: ["echo", "bundle"],
               local: failingBundler,
             },
@@ -796,7 +645,7 @@ describe("bundling", () => {
           new AssetStaging(stack, "Asset", {
             sourcePath: testDir,
             bundling: {
-              image: "alpine",
+              image: DockerImage.fromRegistry("alpine"),
               command: ["echo", "bundle"],
               local: emptyBundler,
             },
@@ -818,7 +667,7 @@ describe("bundling", () => {
           sourcePath: testDir,
           extraHash: "v1",
           bundling: {
-            image: "alpine",
+            image: DockerImage.fromRegistry("alpine"),
             command: ["echo", "bundle"],
             local: new MockLocalBundler(),
           },
@@ -828,7 +677,7 @@ describe("bundling", () => {
           sourcePath: testDir,
           extraHash: "v2",
           bundling: {
-            image: "alpine",
+            image: DockerImage.fromRegistry("alpine"),
             command: ["echo", "bundle"],
             local: new MockLocalBundler(),
           },
