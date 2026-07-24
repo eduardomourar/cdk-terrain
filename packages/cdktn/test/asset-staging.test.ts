@@ -11,6 +11,7 @@ import {
   TerraformStack,
   Testing,
 } from "../lib";
+import { CANONICAL_ASSET_HASHES } from "../lib/features";
 
 describe("AssetStaging", () => {
   let tempDir: string;
@@ -773,6 +774,59 @@ describe("AssetStaging", () => {
       });
 
       expect(asset.absoluteStagedPath).toMatch(/\.txt$/);
+    });
+  });
+
+  describe("canonical hash feature flag", () => {
+    test("reads canonicalAssetHashes feature flag correctly when enabled", () => {
+      // GIVEN
+      const app = Testing.app({
+        context: {
+          [CANONICAL_ASSET_HASHES]: "true",
+        },
+      });
+      const stack = new TerraformStack(app, "Stack");
+      const sourceDir = path.join(tempDir, "source");
+      fs.mkdirSync(sourceDir);
+      fs.writeFileSync(path.join(sourceDir, "file.txt"), "content");
+
+      // WHEN
+      const staging = new AssetStaging(stack, "Asset", {
+        sourcePath: sourceDir,
+      });
+
+      // THEN - should use canonical hashing when flag is enabled
+      expect(staging.assetHash).toBeDefined();
+      expect(staging.assetHash.length).toBeGreaterThan(0);
+    });
+
+    test("respects disabled canonicalAssetHashes flag", () => {
+      // GIVEN
+      const app = Testing.app({
+        context: {
+          [CANONICAL_ASSET_HASHES]: "false",
+        },
+      });
+      const stack = new TerraformStack(app, "Stack");
+      const sourceDir = path.join(tempDir, "source");
+      fs.mkdirSync(sourceDir);
+      fs.writeFileSync(path.join(sourceDir, "file.txt"), "content");
+
+      // WHEN
+      const staging = new AssetStaging(stack, "Asset", {
+        sourcePath: sourceDir,
+      });
+
+      // THEN - should work with legacy hashing
+      expect(staging.assetHash).toBeDefined();
+      expect(staging.assetHash.length).toBeGreaterThan(0);
+    });
+
+    test("uses feature flag constant not hardcoded string", () => {
+      // This test ensures we're using the constant from features.ts
+      // not the legacy "cdktn:canonicalAssetHashes" string
+      expect(CANONICAL_ASSET_HASHES).toBe("canonicalAssetHashes");
+      expect(CANONICAL_ASSET_HASHES).not.toBe("cdktn:canonicalAssetHashes");
     });
   });
 });

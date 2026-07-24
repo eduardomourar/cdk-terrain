@@ -211,6 +211,12 @@ export interface DockerVolume {
    * @default DELEGATED
    */
   readonly consistency?: DockerVolumeConsistency;
+
+  /**
+   * Mount the volume as read-only
+   * @default false
+   */
+  readonly readOnly?: boolean;
 }
 
 /**
@@ -349,6 +355,20 @@ export class DockerImage {
       );
     }
 
+    // Validate that the Dockerfile stays within the context path
+    if (options.file) {
+      const resolvedContext = path.resolve(contextPath);
+      const resolvedDockerfile = path.resolve(contextPath, options.file);
+      if (
+        !resolvedDockerfile.startsWith(resolvedContext + path.sep) &&
+        resolvedDockerfile !== resolvedContext
+      ) {
+        throw new Error(
+          `Dockerfile must be within the build context. Context: ${contextPath}, Dockerfile: ${options.file}`,
+        );
+      }
+    }
+
     // Create stable tag based on context and options
     const input = JSON.stringify({ path: contextPath, ...options });
     const hash = crypto.createHash("sha256").update(input).digest("hex");
@@ -400,10 +420,11 @@ export class DockerImage {
       ...(options.platform ? ["--platform", options.platform] : []),
       ...(options.user ? ["-u", options.user] : []),
       ...(options.volumesFrom?.flatMap((v) => ["--volumes-from", v]) || []),
-      ...(options.volumes?.flatMap((v) => [
-        "-v",
-        `${v.hostPath}:${v.containerPath}:${v.consistency || DockerVolumeConsistency.DELEGATED}`,
-      ]) || []),
+      ...(options.volumes?.flatMap((v) => {
+        const consistency = v.consistency || DockerVolumeConsistency.DELEGATED;
+        const mode = v.readOnly ? `${consistency},ro` : consistency;
+        return ["-v", `${v.hostPath}:${v.containerPath}:${mode}`];
+      }) || []),
       ...(Object.entries(options.environment || {}).flatMap(([k, v]) => [
         "--env",
         `${k}=${v}`,

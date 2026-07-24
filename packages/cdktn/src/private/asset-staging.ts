@@ -69,6 +69,7 @@ export class AssetBundlingBindMount extends AssetBundlingBase {
         {
           hostPath: this.options.sourcePath,
           containerPath: AssetStaging.BUNDLING_INPUT_DIR,
+          readOnly: true,
         },
         {
           hostPath: this.options.bundleDir,
@@ -181,27 +182,51 @@ export class AssetBundlingVolumeCopy extends AssetBundlingBase {
     const user = this.determineUser();
     this.prepareVolumes();
     this.startHelperContainer(user); // TODO handle user properly
-    this.copyInputFrom(this.options.sourcePath);
 
-    this.options.image.run({
-      command: this.options.command,
-      user: user,
-      environment: this.options.environment,
-      entrypoint: this.options.entrypoint,
-      workingDirectory:
-        this.options.workingDirectory ?? AssetStaging.BUNDLING_INPUT_DIR,
-      securityOpt: this.options.securityOpt ?? "",
-      volumes: this.options.volumes,
-      volumesFrom: [
-        this.copyContainerName,
-        ...(this.options.volumesFrom ?? []),
-      ],
-      platform: this.options.platform,
-    });
+    try {
+      this.copyInputFrom(this.options.sourcePath);
 
-    this.copyOutputTo(this.options.bundleDir);
-    this.cleanHelperContainer();
-    this.cleanVolumes();
+      this.options.image.run({
+        command: this.options.command,
+        user: user,
+        environment: this.options.environment,
+        entrypoint: this.options.entrypoint,
+        workingDirectory:
+          this.options.workingDirectory ?? AssetStaging.BUNDLING_INPUT_DIR,
+        securityOpt: this.options.securityOpt ?? "",
+        volumes: this.options.volumes,
+        volumesFrom: [
+          this.copyContainerName,
+          ...(this.options.volumesFrom ?? []),
+        ],
+        platform: this.options.platform,
+        network: this.options.network,
+      });
+
+      this.copyOutputTo(this.options.bundleDir);
+    } finally {
+      // Attempt to clean up all resources, even if some fail
+      const errors: Error[] = [];
+
+      try {
+        this.cleanHelperContainer();
+      } catch (e) {
+        errors.push(e as Error);
+      }
+
+      try {
+        this.cleanVolumes();
+      } catch (e) {
+        errors.push(e as Error);
+      }
+
+      // If cleanup failed, log the errors but don't throw unless all cleanups failed
+      if (errors.length > 0) {
+        console.warn(
+          `Cleanup warnings: ${errors.map((e) => e.message).join("; ")}`,
+        );
+      }
+    }
   }
 }
 

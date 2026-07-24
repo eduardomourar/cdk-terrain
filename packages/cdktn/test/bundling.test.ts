@@ -685,4 +685,74 @@ describe("bundling", () => {
       });
     });
   });
+
+  describe("DockerImage.fromBuild Dockerfile path validation", () => {
+    test("rejects absolute Dockerfile path", () => {
+      // GIVEN
+      const contextPath = "/some/context";
+
+      // WHEN/THEN
+      expect(() =>
+        DockerImage.fromBuild(contextPath, {
+          file: "/absolute/path/Dockerfile",
+        }),
+      ).toThrow(/must be relative to context/);
+    });
+
+    test("rejects Dockerfile outside context with ../", () => {
+      // GIVEN
+      const contextPath = path.join(__dirname, "fixtures");
+
+      // WHEN/THEN
+      expect(() =>
+        DockerImage.fromBuild(contextPath, {
+          file: "../Dockerfile",
+        }),
+      ).toThrow(/must be within the build context/);
+    });
+
+    test("rejects Dockerfile outside context with nested ../", () => {
+      // GIVEN
+      const contextPath = path.join(__dirname, "fixtures", "app");
+
+      // WHEN/THEN
+      expect(() =>
+        DockerImage.fromBuild(contextPath, {
+          file: "../../outside/Dockerfile",
+        }),
+      ).toThrow(/must be within the build context/);
+    });
+
+    test("accepts Dockerfile within context subdirectory", () => {
+      // GIVEN
+      const contextPath = path.join(__dirname, "fixtures");
+
+      // WHEN - Path validation should pass
+      // Docker build itself may fail if Docker isn't available, but that's
+      // a different error and not a validation error
+      try {
+        DockerImage.fromBuild(contextPath, {
+          file: "app/cdktf.json", // Use existing file
+        });
+      } catch (e: any) {
+        // Should not be a validation error about path being outside context
+        expect(e.message).not.toMatch(/must be within the build context/);
+      }
+    });
+
+    test("accepts Dockerfile at context root", () => {
+      // GIVEN
+      const contextPath = path.join(__dirname, "fixtures");
+
+      // WHEN - Path validation should pass
+      try {
+        DockerImage.fromBuild(contextPath, {
+          file: "cdktf.json", // Use existing file at root
+        });
+      } catch (e: any) {
+        // Should not be a validation error about path being outside context
+        expect(e.message).not.toMatch(/must be within the build context/);
+      }
+    });
+  });
 });

@@ -17,6 +17,7 @@ import {
   bundlingOutputNotArchived,
   bundlingOutputNotSingleFile,
 } from "./errors";
+import { CANONICAL_ASSET_HASHES } from "./features";
 import {
   AssetBundlingBindMount,
   AssetBundlingVolumeCopy,
@@ -380,7 +381,7 @@ export class AssetStaging extends Construct {
         : sourcePath || this.sourcePath;
 
     // Determine canonical mode from context (respects canonicalAssetHashes feature flag)
-    const canonical = !!this.node.tryGetContext("cdktn:canonicalAssetHashes");
+    const canonical = !!this.node.tryGetContext(CANONICAL_ASSET_HASHES);
 
     // Determine if this is an archive for hash framing
     const isArchive = this.packaging === FileAssetPackaging.ZIP_DIRECTORY;

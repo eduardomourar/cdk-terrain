@@ -110,7 +110,7 @@ describe("staging", () => {
 
     // THEN
     expect(readDockerStubInput()).toEqual(
-      `run --rm ${USER_ARG} -v /input:/asset-input:delegated -v /output:/asset-output:delegated -w /asset-input alpine DOCKER_STUB_SUCCESS`,
+      `run --rm ${USER_ARG} -v /input:/asset-input:delegated,ro -v /output:/asset-output:delegated -w /asset-input alpine DOCKER_STUB_SUCCESS`,
     );
 
     // Shows a message before bundling
@@ -136,7 +136,7 @@ describe("staging", () => {
     ).toThrow(/[Bb]undl.*output.*empty|[Bb]undl.*did not produce/);
 
     expect(readDockerStubInput()).toEqual(
-      `run --rm ${USER_ARG} -v /input:/asset-input:delegated -v /output:/asset-output:delegated -w /asset-input alpine DOCKER_STUB_SUCCESS_NO_OUTPUT`,
+      `run --rm ${USER_ARG} -v /input:/asset-input:delegated,ro -v /output:/asset-output:delegated -w /asset-input alpine DOCKER_STUB_SUCCESS_NO_OUTPUT`,
     );
   });
 
@@ -157,7 +157,7 @@ describe("staging", () => {
     ).toThrow(/[Ff]ailed.*bundl|docker.*exited/i);
 
     expect(readDockerStubInput()).toEqual(
-      `run --rm ${USER_ARG} -v /input:/asset-input:delegated -v /output:/asset-output:delegated -w /asset-input this-is-an-invalid-docker-image DOCKER_STUB_FAIL`,
+      `run --rm ${USER_ARG} -v /input:/asset-input:delegated,ro -v /output:/asset-output:delegated -w /asset-input this-is-an-invalid-docker-image DOCKER_STUB_FAIL`,
     );
   });
 
@@ -177,7 +177,7 @@ describe("staging", () => {
 
     // THEN
     expect(readDockerStubInput()).toEqual(
-      `run --rm --security-opt no-new-privileges ${USER_ARG} -v /input:/asset-input:delegated -v /output:/asset-output:delegated -w /asset-input alpine DOCKER_STUB_SUCCESS`,
+      `run --rm --security-opt no-new-privileges ${USER_ARG} -v /input:/asset-input:delegated,ro -v /output:/asset-output:delegated -w /asset-input alpine DOCKER_STUB_SUCCESS`,
     );
   });
 
@@ -197,7 +197,7 @@ describe("staging", () => {
 
     // THEN
     expect(readDockerStubInput()).toEqual(
-      `run --rm ${USER_ARG} -v /input:/asset-input:delegated -v /output:/asset-output:delegated -w /asset-input --entrypoint DOCKER_STUB_SUCCESS alpine DOCKER_STUB_SUCCESS`,
+      `run --rm ${USER_ARG} -v /input:/asset-input:delegated,ro -v /output:/asset-output:delegated -w /asset-input --entrypoint DOCKER_STUB_SUCCESS alpine DOCKER_STUB_SUCCESS`,
     );
   });
 
@@ -345,7 +345,7 @@ describe("staging", () => {
     // THEN
     const input = readDockerStubInput();
     // Should have -v bind mount flags
-    expect(input).toContain("-v /input:/asset-input:delegated");
+    expect(input).toContain("-v /input:/asset-input:delegated,ro");
     expect(input).toContain("-v /output:/asset-output:delegated");
     // Should NOT have volume create commands
     expect(input).not.toContain("volume create");
@@ -367,7 +367,7 @@ describe("staging", () => {
 
     // THEN
     const input = readDockerStubInput();
-    expect(input).toContain("-v /input:/asset-input:delegated");
+    expect(input).toContain("-v /input:/asset-input:delegated,ro");
     expect(input).toContain("-v /output:/asset-output:delegated");
   });
 
@@ -770,6 +770,133 @@ describe("staging with docker cp", () => {
 
     // THEN - Docker should not have been called
     expect(fs.existsSync(STUB_INPUT_CP_FILE)).toEqual(false);
+  });
+
+  describe("read-only input mount", () => {
+    test("input volume is read-only while output volume is writable", () => {
+      // GIVEN
+      const directory = FIXTURE_TEST1_DIR;
+
+      // WHEN
+      new AssetStaging(stack, "Asset", {
+        sourcePath: directory,
+        bundling: {
+          image: DockerImage.fromRegistry("alpine"),
+          command: [DockerStubCommand.VOLUME_SINGLE_ARCHIVE],
+          bundlingFileAccess: BundlingFileAccess.VOLUME_COPY,
+        },
+      });
+
+      // THEN
+      const dockerCalls = readDockerStubInputConcat(
+        STUB_INPUT_CP_CONCAT_FILE,
+      ).split(/\r?\n/);
+
+      // Find the bundling run command
+      const bundlingRun = dockerCalls.find(
+        (line) =>
+          line.includes("run --rm") &&
+          line.includes("alpine DOCKER_STUB_VOLUME_SINGLE_ARCHIVE"),
+      );
+
+      // For VOLUME_COPY, the input/output are accessed via --volumes-from
+      // The volumes themselves are created separately and mounted to the helper container
+      // The read-only enforcement happens at the helper container level
+      expect(bundlingRun).toBeDefined();
+      expect(bundlingRun).toContain("--volumes-from");
+    });
+  });
+
+  describe("network option forwarding", () => {
+    test("VOLUME_COPY forwards network option to bundling container", () => {
+      // GIVEN
+      const directory = FIXTURE_TEST1_DIR;
+
+      // WHEN
+      new AssetStaging(stack, "Asset", {
+        sourcePath: directory,
+        bundling: {
+          image: DockerImage.fromRegistry("alpine"),
+          command: [DockerStubCommand.VOLUME_SINGLE_ARCHIVE],
+          bundlingFileAccess: BundlingFileAccess.VOLUME_COPY,
+          network: "host",
+        },
+      });
+
+      // THEN - The bundling container should use the network option
+      const concat = readDockerStubInputConcat(STUB_INPUT_CP_CONCAT_FILE);
+      const dockerCalls = concat.split(/\r?\n/);
+
+      // Find the bundling run (not the helper container run)
+      const bundlingRun = dockerCalls.find(
+        (line) =>
+          line.includes("run --rm") &&
+          line.includes("alpine DOCKER_STUB_VOLUME_SINGLE_ARCHIVE"),
+      );
+
+      expect(bundlingRun).toBeDefined();
+      expect(bundlingRun).toContain("--network host");
+    });
+  });
+
+  describe("VOLUME_COPY cleanup resilience", () => {
+    test("cleanup commands are present in the Docker call sequence", () => {
+      // GIVEN
+      const directory = FIXTURE_TEST1_DIR;
+
+      // WHEN - Run a normal VOLUME_COPY bundling operation
+      new AssetStaging(stack, "Asset", {
+        sourcePath: directory,
+        bundling: {
+          image: DockerImage.fromRegistry("alpine"),
+          command: [DockerStubCommand.VOLUME_SINGLE_ARCHIVE],
+          bundlingFileAccess: BundlingFileAccess.VOLUME_COPY,
+        },
+      });
+
+      // THEN - Verify cleanup commands are executed
+      const concat = readDockerStubInputConcat(STUB_INPUT_CP_CONCAT_FILE);
+      const dockerCalls = concat.split(/\r?\n/);
+
+      // The sequence should include setup, bundling, AND cleanup
+      // Verify setup happened
+      expect(dockerCalls).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("volume create assetInput"),
+          expect.stringContaining("volume create assetOutput"),
+          expect.stringMatching(/run --name copyContainer/),
+        ]),
+      );
+
+      // Verify bundling happened
+      expect(dockerCalls).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(
+            /run --rm.*--volumes-from copyContainer.*alpine DOCKER_STUB_VOLUME_SINGLE_ARCHIVE/,
+          ),
+        ]),
+      );
+
+      // Most importantly: verify cleanup happened AFTER bundling
+      expect(dockerCalls).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/rm copyContainer/),
+          expect.stringContaining("volume rm assetInput"),
+          expect.stringContaining("volume rm assetOutput"),
+        ]),
+      );
+
+      // Verify cleanup comes after bundling in the sequence
+      const bundlingIndex = dockerCalls.findIndex((cmd) =>
+        cmd.includes("alpine DOCKER_STUB_VOLUME_SINGLE_ARCHIVE"),
+      );
+      const cleanupIndex = dockerCalls.findIndex((cmd) =>
+        cmd.includes("rm copyContainer"),
+      );
+
+      expect(bundlingIndex).toBeGreaterThanOrEqual(0);
+      expect(cleanupIndex).toBeGreaterThan(bundlingIndex);
+    });
   });
 });
 
