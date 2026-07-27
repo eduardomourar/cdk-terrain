@@ -207,8 +207,10 @@ export interface DockerVolume {
   readonly containerPath: string;
 
   /**
-   * Mount consistency (macOS only)
-   * @default DELEGATED
+   * Mount consistency. This is a macOS-only performance hint and is ignored by
+   * Docker on other platforms.
+   *
+   * @default - no consistency option is passed
    */
   readonly consistency?: DockerVolumeConsistency;
 
@@ -340,7 +342,10 @@ export class DockerImage {
   }
 
   /**
-   * Build an image from a Dockerfile
+   * Build an image from a Dockerfile.
+   *
+   * Note that this runs `docker build` eagerly, matching AWS CDK: merely
+   * describing an image performs the build.
    *
    * @param contextPath Path to directory containing Dockerfile
    * @param options Build options
@@ -369,7 +374,9 @@ export class DockerImage {
       }
     }
 
-    // Create stable tag based on context and options
+    // Stable tag derived from the build inputs' identity, not their contents:
+    // editing the Dockerfile reuses the tag. Do not feed this into an asset
+    // hash without also hashing the build context.
     const input = JSON.stringify({ path: contextPath, ...options });
     const hash = crypto.createHash("sha256").update(input).digest("hex");
     const tag = `cdktn-${hash}`;
@@ -421,9 +428,15 @@ export class DockerImage {
       ...(options.user ? ["-u", options.user] : []),
       ...(options.volumesFrom?.flatMap((v) => ["--volumes-from", v]) || []),
       ...(options.volumes?.flatMap((v) => {
-        const consistency = v.consistency || DockerVolumeConsistency.DELEGATED;
-        const mode = v.readOnly ? `${consistency},ro` : consistency;
-        return ["-v", `${v.hostPath}:${v.containerPath}:${mode}`];
+        // `consistency` is a macOS-only hint, so it is only emitted when asked
+        // for; `ro` is meaningful everywhere.
+        const mode = [v.consistency, v.readOnly ? "ro" : undefined]
+          .filter(Boolean)
+          .join(",");
+        return [
+          "-v",
+          `${v.hostPath}:${v.containerPath}${mode ? `:${mode}` : ""}`,
+        ];
       }) || []),
       ...(Object.entries(options.environment || {}).flatMap(([k, v]) => [
         "--env",

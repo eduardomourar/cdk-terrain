@@ -31,7 +31,13 @@ export interface TerraformAssetConfig {
   readonly assetHash?: string;
 
   /**
-   * Glob patterns to exclude from the asset.
+   * Paths to exclude from the asset, relative to `path` and always
+   * `/`-separated. Each entry may be an exact file path, a `*.ext` suffix
+   * match, or a directory (with or without a trailing `/`), which also excludes
+   * everything inside it.
+   *
+   * This is not full glob syntax: `**`, `?`, character classes and `!`
+   * negation are not supported.
    *
    * @default - nothing is excluded
    */
@@ -60,9 +66,9 @@ export interface TerraformAssetConfig {
 
   /**
    * Specify a custom hash for this asset. If `assetHashType` is set it must
-   * be set to `AssetHashType.CUSTOM`. For consistency, this custom hash will
-   * be SHA256 hashed and encoded as hex. The resulting hash will be the asset
-   * hash.
+   * be set to `AssetHashType.CUSTOM`. The value is used verbatim as the asset
+   * hash, and because it names the staged asset file it may only contain
+   * letters, digits, `_`, `.` and `-`.
    *
    * NOTE: the hash is used in order to identify a specific revision of the asset, and
    * used for optimizing and caching deployment activities related to this asset such as
@@ -161,6 +167,7 @@ export class TerraformAsset extends Construct {
 
       // Override with explicit type if provided
       if (config.type !== undefined) {
+        this.validateType(id, config.path, config.type);
         this.type = config.type;
       }
     } else {
@@ -188,6 +195,25 @@ export class TerraformAsset extends Construct {
     addCustomSynthesis(this, {
       onSynthesize: this._onSynthesize.bind(this),
     });
+  }
+
+  /**
+   * Reject a `type` that the staged asset cannot satisfy, matching the
+   * validation the non-staged path performs. A directory (or anything staged as
+   * a zip) can never be emitted as `AssetType.FILE`, and a single staged file
+   * can never be emitted as `AssetType.DIRECTORY`.
+   */
+  private validateType(id: string, configPath: string, type: AssetType) {
+    const stagedAsDirectory =
+      this.staging!.packaging === FileAssetPackaging.ZIP_DIRECTORY;
+
+    if (stagedAsDirectory && type === AssetType.FILE) {
+      throw assetExpectsDirectory(id, configPath);
+    }
+
+    if (!stagedAsDirectory && type === AssetType.DIRECTORY) {
+      throw assetExpectsDirectory(id, configPath);
+    }
   }
 
   private get namedFolder(): string {
@@ -256,16 +282,13 @@ export class TerraformAsset extends Construct {
         break;
 
       case AssetType.ARCHIVE:
-        // Check if already archived by staging
+        // A staged single file is copied as-is; only a directory can be zipped.
         if (
           this.staging &&
-          this.staging.packaging === FileAssetPackaging.FILE &&
-          this.staging.isArchive
+          this.staging.packaging === FileAssetPackaging.FILE
         ) {
-          // Already an archive file (single .zip/.tar.gz file), just copy it
           fs.copyFileSync(sourceToUse, targetPath);
         } else {
-          // Need to create archive (from directory)
           archiveSync(sourceToUse, targetPath);
         }
         break;

@@ -574,6 +574,11 @@ export const bundlingOutputNotSingleFile = (
     `AssetStaging ${id} expected BundlingOutput.SINGLE_FILE but the bundling output directory '${outputPath}' contains ${fileCount} file(s) instead of exactly one file.\n\nFiles found:\n${files.map((f) => `  - ${f}`).join("\n")}\n\nEither:\n  1. Adjust your bundling command to output a single file, or\n  2. Change outputType to BundlingOutput.NOT_ARCHIVED or BundlingOutput.AUTO_DISCOVER`,
   );
 
+export const assetHashInvalid = (id: string, assetHash: string) =>
+  new Error(
+    `Asset ${id} was given the custom assetHash '${assetHash}', which is not usable as a file name. A custom assetHash is used verbatim to name the staged asset, so it may only contain letters, digits, '_', '.' and '-'.`,
+  );
+
 export const bundlingOutputEmpty = (id: string, outputPath: string) =>
   new Error(
     `AssetStaging ${id} bundling output directory '${outputPath}' is empty. The bundling command must produce at least one output file.`,

@@ -9,6 +9,7 @@ import * as os from "os";
 import {
   BundlingOutput,
   DockerImage,
+  DockerVolumeConsistency,
   type ILocalBundling,
   type BundlingOptions,
 } from "../lib/bundling";
@@ -99,15 +100,36 @@ describe("bundling", () => {
       );
     });
 
-    test("run handles volumes correctly", () => {
+    test("run mounts volumes without imposing a consistency mode", () => {
       const image = DockerImage.fromRegistry("alpine");
       image.run({
         volumes: [{ hostPath: "/host", containerPath: "/container" }],
       });
 
+      // `consistency` is a macOS-only hint, so it is not forced onto mounts.
       expect(spawnSync).toHaveBeenCalledWith(
         "docker",
-        expect.arrayContaining(["-v", "/host:/container:delegated"]),
+        expect.arrayContaining(["-v", "/host:/container"]),
+        expect.any(Object),
+      );
+    });
+
+    test("run applies readOnly and consistency to volume mounts", () => {
+      const image = DockerImage.fromRegistry("alpine");
+      image.run({
+        volumes: [
+          { hostPath: "/ro", containerPath: "/in", readOnly: true },
+          {
+            hostPath: "/cached",
+            containerPath: "/c",
+            consistency: DockerVolumeConsistency.CACHED,
+          },
+        ],
+      });
+
+      expect(spawnSync).toHaveBeenLastCalledWith(
+        "docker",
+        expect.arrayContaining(["-v", "/ro:/in:ro", "-v", "/cached:/c:cached"]),
         expect.any(Object),
       );
     });
@@ -723,36 +745,57 @@ describe("bundling", () => {
       ).toThrow(/must be within the build context/);
     });
 
-    test("accepts Dockerfile within context subdirectory", () => {
+    test("builds with a Dockerfile in a context subdirectory", () => {
       // GIVEN
+      (spawnSync as jest.Mock).mockReturnValue({
+        status: 0,
+        stdout: Buffer.from(""),
+        stderr: Buffer.from(""),
+      });
       const contextPath = path.join(__dirname, "fixtures");
 
-      // WHEN - Path validation should pass
-      // Docker build itself may fail if Docker isn't available, but that's
-      // a different error and not a validation error
-      try {
-        DockerImage.fromBuild(contextPath, {
-          file: "app/cdktf.json", // Use existing file
-        });
-      } catch (e: any) {
-        // Should not be a validation error about path being outside context
-        expect(e.message).not.toMatch(/must be within the build context/);
-      }
+      // WHEN
+      const image = DockerImage.fromBuild(contextPath, {
+        file: "app/cdktf.json",
+      });
+
+      // THEN - the build actually ran, with -f pointing at the resolved file
+      expect(image.image).toMatch(/^cdktn-[a-f0-9]{64}$/);
+      expect(spawnSync).toHaveBeenLastCalledWith(
+        "docker",
+        expect.arrayContaining([
+          "build",
+          "-f",
+          path.join(contextPath, "app/cdktf.json"),
+          contextPath,
+        ]),
+        expect.any(Object),
+      );
     });
 
-    test("accepts Dockerfile at context root", () => {
+    test("builds with a Dockerfile at the context root", () => {
       // GIVEN
+      (spawnSync as jest.Mock).mockReturnValue({
+        status: 0,
+        stdout: Buffer.from(""),
+        stderr: Buffer.from(""),
+      });
       const contextPath = path.join(__dirname, "fixtures");
 
-      // WHEN - Path validation should pass
-      try {
-        DockerImage.fromBuild(contextPath, {
-          file: "cdktf.json", // Use existing file at root
-        });
-      } catch (e: any) {
-        // Should not be a validation error about path being outside context
-        expect(e.message).not.toMatch(/must be within the build context/);
-      }
+      // WHEN
+      DockerImage.fromBuild(contextPath, { file: "cdktf.json" });
+
+      // THEN
+      expect(spawnSync).toHaveBeenLastCalledWith(
+        "docker",
+        expect.arrayContaining([
+          "build",
+          "-f",
+          path.join(contextPath, "cdktf.json"),
+          contextPath,
+        ]),
+        expect.any(Object),
+      );
     });
   });
 });

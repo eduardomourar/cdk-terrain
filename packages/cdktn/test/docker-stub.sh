@@ -9,8 +9,11 @@ set -euo pipefail
 # `/tmp/docker-stub.input` and accepts one of several commands that impact its
 # behavior.
 
-echo "$@" >> /tmp/docker-stub.input.concat
-echo "$@" > /tmp/docker-stub.input
+# Output goes to $DOCKER_STUB_DIR so parallel jest workers cannot clobber each
+# other's recorded invocations.
+stub_dir="${DOCKER_STUB_DIR:-/tmp}"
+echo "$@" >> "${stub_dir}/docker-stub.input.concat"
+echo "$@" > "${stub_dir}/docker-stub.input"
 
 if echo "$@" | grep "DOCKER_STUB_SUCCESS_NO_OUTPUT"; then
   exit 0

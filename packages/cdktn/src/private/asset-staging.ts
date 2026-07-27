@@ -1,11 +1,20 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
 import { spawnSync, type SpawnSyncOptions } from "child_process";
+import { type IConstruct } from "constructs";
 import * as crypto from "crypto";
 import * as os from "os";
+import { Annotations } from "../annotations";
 import { AssetStaging } from "../asset-staging";
 import { type BundlingOptions } from "../bundling";
 import { ExecutionError } from "../errors";
+
+/**
+ * Helper image used to own and seed the input/output volumes in VOLUME_COPY
+ * mode. Pinned so bundling does not change underneath users when the upstream
+ * tag moves; override with `CDKTN_BUNDLING_HELPER_IMAGE` if a mirror is needed.
+ */
+const DEFAULT_HELPER_IMAGE = "public.ecr.aws/docker/library/alpine:3.21";
 
 /**
  * Options for Docker based bundling of assets
@@ -19,6 +28,10 @@ interface AssetBundlingOptions extends BundlingOptions {
    * Path where the output files should be stored
    */
   readonly bundleDir: string;
+  /**
+   * Construct that owns this bundling run, used to report cleanup warnings.
+   */
+  readonly scope: IConstruct;
 }
 
 /**
@@ -46,6 +59,17 @@ abstract class AssetBundlingBase {
     }
     return user;
   }
+
+  /**
+   * Surface best-effort cleanup failures without failing the synth: the
+   * bundling output is already valid, but leaked Docker resources are worth
+   * telling the user about.
+   */
+  protected warnCleanupFailures(failures: string[]) {
+    Annotations.of(this.options.scope).addWarning(
+      `Failed to clean up Docker resources after bundling; they may need to be removed manually. ${failures.join("; ")}`,
+    );
+  }
 }
 
 /**
@@ -63,7 +87,7 @@ export class AssetBundlingBindMount extends AssetBundlingBase {
       entrypoint: this.options.entrypoint,
       workingDirectory:
         this.options.workingDirectory ?? AssetStaging.BUNDLING_INPUT_DIR,
-      securityOpt: this.options.securityOpt ?? "",
+      securityOpt: this.options.securityOpt,
       volumesFrom: this.options.volumesFrom,
       volumes: [
         {
@@ -117,14 +141,6 @@ export class AssetBundlingVolumeCopy extends AssetBundlingBase {
   }
 
   /**
-   * Removes volumes for asset input and output
-   */
-  private cleanVolumes() {
-    dockerExec(["volume", "rm", this.inputVolumeName]);
-    dockerExec(["volume", "rm", this.outputVolumeName]);
-  }
-
-  /**
    * runs a helper container that holds volumes and does some preparation tasks
    * @param user The user that will later access these files and needs permissions to do so
    */
@@ -137,7 +153,7 @@ export class AssetBundlingVolumeCopy extends AssetBundlingBase {
       `${this.inputVolumeName}:${AssetStaging.BUNDLING_INPUT_DIR}`,
       "-v",
       `${this.outputVolumeName}:${AssetStaging.BUNDLING_OUTPUT_DIR}`,
-      "public.ecr.aws/docker/library/alpine",
+      process.env.CDKTN_BUNDLING_HELPER_IMAGE ?? DEFAULT_HELPER_IMAGE,
       "sh",
       "-c",
       `mkdir -p ${AssetStaging.BUNDLING_INPUT_DIR} && chown -R ${user} ${AssetStaging.BUNDLING_OUTPUT_DIR} && chown -R ${user} ${AssetStaging.BUNDLING_INPUT_DIR}`,
@@ -149,6 +165,36 @@ export class AssetBundlingVolumeCopy extends AssetBundlingBase {
    */
   private cleanHelperContainer() {
     dockerExec(["rm", this.copyContainerName]);
+  }
+
+  /**
+   * Tear down every resource this bundling run may have created. Each step is
+   * attempted independently so one failure cannot strand the others, and the
+   * whole teardown is best-effort: a cleanup failure must not mask the
+   * bundling error (or fail an otherwise successful synth).
+   */
+  private cleanup() {
+    const failures: string[] = [];
+
+    for (const [what, remove] of [
+      [this.copyContainerName, () => this.cleanHelperContainer()],
+      [
+        this.inputVolumeName,
+        () => dockerExec(["volume", "rm", this.inputVolumeName]),
+      ],
+      [
+        this.outputVolumeName,
+        () => dockerExec(["volume", "rm", this.outputVolumeName]),
+      ],
+    ] as const) {
+      try {
+        remove();
+      } catch (e) {
+        failures.push(`${what}: ${(e as Error).message}`);
+      }
+    }
+
+    return failures;
   }
 
   /**
@@ -180,10 +226,12 @@ export class AssetBundlingVolumeCopy extends AssetBundlingBase {
    */
   public run() {
     const user = this.determineUser();
-    this.prepareVolumes();
-    this.startHelperContainer(user); // TODO handle user properly
 
+    // The try opens before any resource is created: a failure part-way through
+    // volume creation or helper startup must still be cleaned up.
     try {
+      this.prepareVolumes();
+      this.startHelperContainer(user); // TODO handle user properly
       this.copyInputFrom(this.options.sourcePath);
 
       this.options.image.run({
@@ -193,7 +241,7 @@ export class AssetBundlingVolumeCopy extends AssetBundlingBase {
         entrypoint: this.options.entrypoint,
         workingDirectory:
           this.options.workingDirectory ?? AssetStaging.BUNDLING_INPUT_DIR,
-        securityOpt: this.options.securityOpt ?? "",
+        securityOpt: this.options.securityOpt,
         volumes: this.options.volumes,
         volumesFrom: [
           this.copyContainerName,
@@ -205,26 +253,9 @@ export class AssetBundlingVolumeCopy extends AssetBundlingBase {
 
       this.copyOutputTo(this.options.bundleDir);
     } finally {
-      // Attempt to clean up all resources, even if some fail
-      const errors: Error[] = [];
-
-      try {
-        this.cleanHelperContainer();
-      } catch (e) {
-        errors.push(e as Error);
-      }
-
-      try {
-        this.cleanVolumes();
-      } catch (e) {
-        errors.push(e as Error);
-      }
-
-      // If cleanup failed, log the errors but don't throw unless all cleanups failed
-      if (errors.length > 0) {
-        console.warn(
-          `Cleanup warnings: ${errors.map((e) => e.message).join("; ")}`,
-        );
+      const failures = this.cleanup();
+      if (failures.length > 0) {
+        this.warnCleanupFailures(failures);
       }
     }
   }
@@ -237,20 +268,20 @@ export class AssetBundlingVolumeCopy extends AssetBundlingBase {
  */
 export function dockerExec(args: string[], options?: SpawnSyncOptions) {
   const prog = process.env.CDK_DOCKER ?? "docker";
-  const proc = spawnSync(
-    prog,
-    args,
-    options ?? {
-      encoding: "utf-8",
-      stdio: [
-        // show Docker output
-        "ignore", // ignore stdio
-        // AWSCDK: process.stderr, // redirect stdout to stderr (causes radix error in bun?)
-        "inherit",
-        "inherit", // inherit stderr
-      ],
-    },
-  );
+  const proc = spawnSync(prog, args, {
+    encoding: "utf-8",
+    stdio: [
+      // show Docker output
+      "ignore", // ignore stdio
+      // AWSCDK: process.stderr, // redirect stdout to stderr (causes radix error in bun?)
+      "inherit",
+      "inherit", // inherit stderr
+    ],
+    ...options,
+    // Forwarded explicitly because a sandboxed `process.env` (as under Jest) is
+    // not otherwise visible to the child.
+    env: { ...process.env, ...options?.env },
+  });
 
   if (proc.error) {
     throw proc.error;

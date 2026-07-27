@@ -6,6 +6,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import {
+  AnnotationMetadataEntryType,
   App,
   AssetHashType,
   AssetStaging,
@@ -18,11 +19,23 @@ import {
   Testing,
 } from "../lib";
 
-const STUB_INPUT_FILE = "/tmp/docker-stub.input";
-const STUB_INPUT_CONCAT_FILE = "/tmp/docker-stub.input.concat";
+// Per-worker so parallel jest workers cannot overwrite each other's recordings.
+const STUB_DIR = fs.mkdtempSync(
+  path.join(
+    os.tmpdir(),
+    `cdktn-docker-stub-${process.env.JEST_WORKER_ID ?? "0"}-`,
+  ),
+);
+process.env.DOCKER_STUB_DIR = STUB_DIR;
 
-const STUB_INPUT_CP_FILE = "/tmp/docker-stub-cp.input";
-const STUB_INPUT_CP_CONCAT_FILE = "/tmp/docker-stub-cp.input.concat";
+const STUB_INPUT_FILE = path.join(STUB_DIR, "docker-stub.input");
+const STUB_INPUT_CONCAT_FILE = path.join(STUB_DIR, "docker-stub.input.concat");
+
+const STUB_INPUT_CP_FILE = path.join(STUB_DIR, "docker-stub-cp.input");
+const STUB_INPUT_CP_CONCAT_FILE = path.join(
+  STUB_DIR,
+  "docker-stub-cp.input.concat",
+);
 
 enum DockerStubCommand {
   SUCCESS = "DOCKER_STUB_SUCCESS",
@@ -45,7 +58,7 @@ const TEST_STAGING_DIR = path.join(
   "cdktf.out",
   "assets",
 );
-const TEST_OUTDIR = path.join(__dirname, "cdk.out");
+const TEST_OUTDIR = path.join(__dirname, "cdktf.out");
 
 const userInfo = os.userInfo();
 const USER_ARG = `-u ${userInfo.uid}:${userInfo.gid}`;
@@ -95,8 +108,8 @@ describe("staging", () => {
   test("with bundling", () => {
     // GIVEN
     const directory = FIXTURE_TEST1_DIR;
-    const processStdErrWriteSpy = jest
-      .spyOn(process.stderr, "write")
+    const processStdOutWriteSpy = jest
+      .spyOn(process.stdout, "write")
       .mockImplementation(() => true);
 
     // WHEN
@@ -110,11 +123,11 @@ describe("staging", () => {
 
     // THEN
     expect(readDockerStubInput()).toEqual(
-      `run --rm ${USER_ARG} -v /input:/asset-input:delegated,ro -v /output:/asset-output:delegated -w /asset-input alpine DOCKER_STUB_SUCCESS`,
+      `run --rm ${USER_ARG} -v /input:/asset-input:ro -v /output:/asset-output -w /asset-input alpine DOCKER_STUB_SUCCESS`,
     );
 
     // Shows a message before bundling
-    expect(processStdErrWriteSpy).toHaveBeenCalledWith(
+    expect(processStdOutWriteSpy).toHaveBeenCalledWith(
       "Bundling asset TestStack/Asset...\n",
     );
   });
@@ -136,7 +149,7 @@ describe("staging", () => {
     ).toThrow(/[Bb]undl.*output.*empty|[Bb]undl.*did not produce/);
 
     expect(readDockerStubInput()).toEqual(
-      `run --rm ${USER_ARG} -v /input:/asset-input:delegated,ro -v /output:/asset-output:delegated -w /asset-input alpine DOCKER_STUB_SUCCESS_NO_OUTPUT`,
+      `run --rm ${USER_ARG} -v /input:/asset-input:ro -v /output:/asset-output -w /asset-input alpine DOCKER_STUB_SUCCESS_NO_OUTPUT`,
     );
   });
 
@@ -157,7 +170,7 @@ describe("staging", () => {
     ).toThrow(/[Ff]ailed.*bundl|docker.*exited/i);
 
     expect(readDockerStubInput()).toEqual(
-      `run --rm ${USER_ARG} -v /input:/asset-input:delegated,ro -v /output:/asset-output:delegated -w /asset-input this-is-an-invalid-docker-image DOCKER_STUB_FAIL`,
+      `run --rm ${USER_ARG} -v /input:/asset-input:ro -v /output:/asset-output -w /asset-input this-is-an-invalid-docker-image DOCKER_STUB_FAIL`,
     );
   });
 
@@ -177,7 +190,7 @@ describe("staging", () => {
 
     // THEN
     expect(readDockerStubInput()).toEqual(
-      `run --rm --security-opt no-new-privileges ${USER_ARG} -v /input:/asset-input:delegated,ro -v /output:/asset-output:delegated -w /asset-input alpine DOCKER_STUB_SUCCESS`,
+      `run --rm --security-opt no-new-privileges ${USER_ARG} -v /input:/asset-input:ro -v /output:/asset-output -w /asset-input alpine DOCKER_STUB_SUCCESS`,
     );
   });
 
@@ -197,7 +210,7 @@ describe("staging", () => {
 
     // THEN
     expect(readDockerStubInput()).toEqual(
-      `run --rm ${USER_ARG} -v /input:/asset-input:delegated,ro -v /output:/asset-output:delegated -w /asset-input --entrypoint DOCKER_STUB_SUCCESS alpine DOCKER_STUB_SUCCESS`,
+      `run --rm ${USER_ARG} -v /input:/asset-input:ro -v /output:/asset-output -w /asset-input --entrypoint DOCKER_STUB_SUCCESS alpine DOCKER_STUB_SUCCESS`,
     );
   });
 
@@ -345,8 +358,8 @@ describe("staging", () => {
     // THEN
     const input = readDockerStubInput();
     // Should have -v bind mount flags
-    expect(input).toContain("-v /input:/asset-input:delegated,ro");
-    expect(input).toContain("-v /output:/asset-output:delegated");
+    expect(input).toContain("-v /input:/asset-input:ro");
+    expect(input).toContain("-v /output:/asset-output");
     // Should NOT have volume create commands
     expect(input).not.toContain("volume create");
   });
@@ -367,8 +380,8 @@ describe("staging", () => {
 
     // THEN
     const input = readDockerStubInput();
-    expect(input).toContain("-v /input:/asset-input:delegated,ro");
-    expect(input).toContain("-v /output:/asset-output:delegated");
+    expect(input).toContain("-v /input:/asset-input:ro");
+    expect(input).toContain("-v /output:/asset-output");
   });
 
   test("bundling with BIND_MOUNT passes environment variables", () => {
@@ -517,7 +530,7 @@ describe("staging with docker cp", () => {
         expect.stringContaining("volume create assetInput"),
         expect.stringContaining("volume create assetOutput"),
         expect.stringMatching(
-          /run --name copyContainer.* -v .+:\/asset-input -v .+:\/asset-output public\.ecr\.aws\/docker\/library\/alpine sh -c mkdir -p \/asset-input && chown -R .* \/asset-output && chown -R .* \/asset-input/,
+          /run --name copyContainer.* -v .+:\/asset-input -v .+:\/asset-output public\.ecr\.aws\/docker\/library\/alpine:[\w.]+ sh -c mkdir -p \/asset-input && chown -R .* \/asset-output && chown -R .* \/asset-input/,
         ),
         expect.stringMatching(
           /cp .*fs\/fixtures\/test1\/\. copyContainer.*:\/asset-input/,
@@ -772,8 +785,12 @@ describe("staging with docker cp", () => {
     expect(fs.existsSync(STUB_INPUT_CP_FILE)).toEqual(false);
   });
 
-  describe("read-only input mount", () => {
-    test("input volume is read-only while output volume is writable", () => {
+  describe("VOLUME_COPY host isolation", () => {
+    // Read-only *host* mounts are a BIND_MOUNT concern (covered in the
+    // BIND_MOUNT tests). VOLUME_COPY instead protects the host by never
+    // mounting host paths into the bundling container at all: the source is
+    // copied into a Docker volume first.
+    test("never bind-mounts a host path into the bundling container", () => {
       // GIVEN
       const directory = FIXTURE_TEST1_DIR;
 
@@ -792,18 +809,18 @@ describe("staging with docker cp", () => {
         STUB_INPUT_CP_CONCAT_FILE,
       ).split(/\r?\n/);
 
-      // Find the bundling run command
       const bundlingRun = dockerCalls.find(
         (line) =>
           line.includes("run --rm") &&
           line.includes("alpine DOCKER_STUB_VOLUME_SINGLE_ARCHIVE"),
       );
 
-      // For VOLUME_COPY, the input/output are accessed via --volumes-from
-      // The volumes themselves are created separately and mounted to the helper container
-      // The read-only enforcement happens at the helper container level
       expect(bundlingRun).toBeDefined();
+      // Volumes come from the helper container, and no `-v host:container`
+      // mount is present.
       expect(bundlingRun).toContain("--volumes-from");
+      expect(bundlingRun).not.toMatch(/ -v \S/);
+      expect(bundlingRun).not.toContain(directory);
     });
   });
 
@@ -896,6 +913,120 @@ describe("staging with docker cp", () => {
 
       expect(bundlingIndex).toBeGreaterThanOrEqual(0);
       expect(cleanupIndex).toBeGreaterThan(bundlingIndex);
+    });
+
+    test("every resource is still torn down when bundling fails", () => {
+      // GIVEN a docker stub whose bundling run fails, while cleanup succeeds
+      const directory = FIXTURE_TEST1_DIR;
+      const failingStub = path.join(STUB_DIR, "docker-stub-run-fail.sh");
+      fs.writeFileSync(
+        failingStub,
+        [
+          "#!/bin/bash",
+          `echo "$@" >> "${STUB_INPUT_CP_CONCAT_FILE}"`,
+          'if echo "$@" | grep -q "run --rm"; then',
+          '  echo "bundling blew up" >&2',
+          "  exit 1",
+          "fi",
+          "exit 0",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const previousDocker = process.env.CDK_DOCKER;
+      process.env.CDK_DOCKER = failingStub;
+
+      try {
+        // WHEN
+        expect(
+          () =>
+            new AssetStaging(stack, "Asset", {
+              sourcePath: directory,
+              bundling: {
+                image: DockerImage.fromRegistry("alpine"),
+                command: [DockerStubCommand.VOLUME_SINGLE_ARCHIVE],
+                bundlingFileAccess: BundlingFileAccess.VOLUME_COPY,
+              },
+            }),
+        ).toThrow(/bundling blew up|exited with/);
+
+        // THEN - the helper container and both volumes are still removed
+        const dockerCalls = readDockerStubInputConcat(
+          STUB_INPUT_CP_CONCAT_FILE,
+        ).split(/\r?\n/);
+        expect(dockerCalls).toEqual(
+          expect.arrayContaining([
+            expect.stringContaining("rm copyContainer"),
+            expect.stringContaining("volume rm assetInput"),
+            expect.stringContaining("volume rm assetOutput"),
+          ]),
+        );
+      } finally {
+        process.env.CDK_DOCKER = previousDocker;
+      }
+    });
+
+    test("a failure removing one resource does not skip the others", () => {
+      // GIVEN a docker stub that fails only when removing the input volume,
+      // which previously aborted the rest of the teardown.
+      const directory = FIXTURE_TEST1_DIR;
+      const failingStub = path.join(STUB_DIR, "docker-stub-partial-fail.sh");
+      fs.writeFileSync(
+        failingStub,
+        [
+          "#!/bin/bash",
+          `echo "$@" >> "${STUB_INPUT_CP_CONCAT_FILE}"`,
+          'if echo "$@" | grep -q "volume rm assetInput"; then',
+          '  echo "cannot remove volume in use" >&2',
+          "  exit 1",
+          "fi",
+          'if echo "$@" | grep -q "^cp .*asset-output"; then',
+          '  touch "${@: -1}/test.zip"',
+          "fi",
+          "exit 0",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const previousDocker = process.env.CDK_DOCKER;
+      process.env.CDK_DOCKER = failingStub;
+
+      try {
+        // WHEN - bundling itself succeeds, so only cleanup misbehaves
+        const staging = new AssetStaging(stack, "Asset", {
+          sourcePath: directory,
+          bundling: {
+            image: DockerImage.fromRegistry("alpine"),
+            command: [DockerStubCommand.VOLUME_SINGLE_ARCHIVE],
+            bundlingFileAccess: BundlingFileAccess.VOLUME_COPY,
+          },
+        });
+
+        // THEN - the failure is not fatal, and the output volume removal was
+        // still attempted despite the input volume removal failing.
+        expect(staging.assetHash).toBeDefined();
+        const dockerCalls = readDockerStubInputConcat(
+          STUB_INPUT_CP_CONCAT_FILE,
+        ).split(/\r?\n/);
+        expect(dockerCalls).toEqual(
+          expect.arrayContaining([
+            expect.stringContaining("volume rm assetInput"),
+            expect.stringContaining("volume rm assetOutput"),
+          ]),
+        );
+
+        // ...and the user is warned about what leaked.
+        const warnings = staging.node.metadata.filter(
+          (m) => m.type === AnnotationMetadataEntryType.WARN,
+        );
+        expect(warnings).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              data: expect.stringContaining("clean up Docker resources"),
+            }),
+          ]),
+        );
+      } finally {
+        process.env.CDK_DOCKER = previousDocker;
+      }
     });
   });
 });

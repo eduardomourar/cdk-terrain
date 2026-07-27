@@ -4,6 +4,7 @@
 
 import * as crypto from "crypto";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import { Construct } from "constructs";
 import { AssetHashType, AssetOptions, FileAssetPackaging } from "./assets";
@@ -13,6 +14,7 @@ import {
   BundlingOutput,
 } from "./bundling";
 import {
+  assetHashInvalid,
   bundlingOutputEmpty,
   bundlingOutputNotArchived,
   bundlingOutputNotSingleFile,
@@ -22,21 +24,67 @@ import {
   AssetBundlingBindMount,
   AssetBundlingVolumeCopy,
 } from "./private/asset-staging";
-import { hashPath as fsHashPath } from "./private/fs";
+import {
+  copySync,
+  excludeMatcher,
+  hashPath as fsHashPath,
+  type ExcludePredicate,
+} from "./private/fs";
 
+/**
+ * Context key mixing an extra value into every asset hash in the tree. Intended
+ * for forcing global cache invalidation; composes with `extraHash` rather than
+ * replacing it.
+ */
 const ASSET_SALT_CONTEXT_KEY = "cdktn:assetHashSalt";
+
+/**
+ * A custom `assetHash` becomes a path segment of the staged file, so it is
+ * restricted to characters that cannot escape the staging directory.
+ */
+const SAFE_ASSET_HASH = /^[A-Za-z0-9_.-]+$/;
+
+/**
+ * Bundling is expensive and its result is fully determined by the source and
+ * the staging options, so identical assets within one synth reuse the first
+ * staged result instead of running the container again.
+ */
+const stagingCache = new Map<string, StagedAsset>();
+
+/**
+ * How an asset is packaged, together with the path that should be staged.
+ */
+interface ResolvedPackaging {
+  readonly packaging: FileAssetPackaging;
+  readonly isArchive: boolean;
+  readonly finalSourcePath: string;
+}
+
+/**
+ * The outcome of staging, cached so repeated identical assets skip bundling.
+ */
+interface StagedAsset extends ResolvedPackaging {
+  readonly assetHash: string;
+  readonly absoluteStagedPath: string;
+}
 
 /**
  * Initialization properties for `AssetStaging`.
  */
 export interface AssetStagingProps extends AssetOptions {
   /**
-   * The source file or directory to copy from.
+   * The source file or directory to copy from. A relative path is resolved
+   * against the current working directory, not against `cdktf.json`.
    */
   readonly sourcePath: string;
 
   /**
-   * File paths matching these patterns will be excluded.
+   * Paths to exclude, relative to `sourcePath` and always `/`-separated. Each
+   * entry may be an exact file path, a `*.ext` suffix match, or a directory
+   * (with or without a trailing `/`), which also excludes everything inside it.
+   *
+   * This is not full glob syntax: `**`, `?`, character classes and `!`
+   * negation are not supported.
    *
    * @default - nothing is excluded
    */
@@ -109,6 +157,7 @@ export class AssetStaging extends Construct {
 
   private readonly assetOutdir: string;
   private readonly sourceStats: fs.Stats;
+  private readonly shouldExclude: ExcludePredicate;
 
   constructor(scope: Construct, id: string, props: AssetStagingProps) {
     super(scope, id);
@@ -120,102 +169,150 @@ export class AssetStaging extends Construct {
     }
 
     this.sourceStats = fs.statSync(this.sourcePath);
+    this.shouldExclude = excludeMatcher(props.exclude ?? []);
+    this.assetOutdir = this.determineAssetOutdir();
 
-    // Determine output directory - try to find cdktf.json or use app outdir
-    const cdktfJsonPath = this.findCdktfJson();
-    if (cdktfJsonPath) {
-      this.assetOutdir = path.join(
-        path.dirname(cdktfJsonPath),
-        "cdktf.out",
-        "assets",
-      );
-    } else {
-      // Fallback to app outdir
-      const app = this.node.root;
-      if ("outdir" in app && typeof (app as any).outdir === "string") {
-        this.assetOutdir = path.join((app as any).outdir, "assets");
-      } else {
-        this.assetOutdir = path.join("cdktf.out", "assets");
-      }
-    }
-
-    // Calculate hash (before bundling if possible)
     const hashType = this.determineHashType(props);
 
-    // If bundling, handle it
+    // Every input that can change the staged result must be in the key,
+    // including the context values that feed the hash.
+    const cacheKey = JSON.stringify({
+      outdir: this.assetOutdir,
+      sourcePath: this.sourcePath,
+      hashType,
+      assetHash: props.assetHash,
+      extraHash: props.extraHash,
+      exclude: props.exclude,
+      bundling: props.bundling,
+      canonical: !!this.node.tryGetContext(CANONICAL_ASSET_HASHES),
+      salt: this.node.tryGetContext(ASSET_SALT_CONTEXT_KEY),
+    });
+    const cached = stagingCache.get(cacheKey);
+    if (cached && fs.existsSync(cached.absoluteStagedPath)) {
+      this.assetHash = cached.assetHash;
+      this.packaging = cached.packaging;
+      this.isArchive = cached.isArchive;
+      this.absoluteStagedPath = cached.absoluteStagedPath;
+      return;
+    }
+
+    // Bundling must happen before packaging is resolved, because the shape of
+    // the bundling output is what decides it.
     let finalSourcePath = this.sourcePath;
+    let scratchDir: string | undefined;
     if (props.bundling) {
       if (!this.sourceStats.isDirectory()) {
         throw new Error("Asset must be a directory when bundling");
       }
-
-      // Try local bundling first
-      let bundled = false;
-      if (props.bundling.local) {
-        const tempDir = path.join(this.assetOutdir, `temp-${Date.now()}`);
-        fs.mkdirSync(tempDir, { recursive: true });
-
-        try {
-          bundled = props.bundling.local.tryBundle(tempDir, props.bundling);
-          if (bundled) {
-            finalSourcePath = tempDir;
-          } else {
-            fs.rmSync(tempDir, { recursive: true, force: true });
-          }
-        } catch (err) {
-          fs.rmSync(tempDir, { recursive: true, force: true });
-          throw err;
-        }
-      }
-
-      // Docker bundling if local didn't work
-      if (!bundled) {
-        const bundleDir = path.join(this.assetOutdir, `bundle-${Date.now()}`);
-        fs.mkdirSync(bundleDir, { recursive: true });
-
-        try {
-          process.stderr.write(`Bundling asset ${this.node.path}...\n`);
-
-          const fileAccess =
-            props.bundling.bundlingFileAccess ?? BundlingFileAccess.BIND_MOUNT;
-
-          if (fileAccess === BundlingFileAccess.VOLUME_COPY) {
-            new AssetBundlingVolumeCopy({
-              ...props.bundling,
-              sourcePath: this.sourcePath,
-              bundleDir,
-            }).run();
-          } else {
-            new AssetBundlingBindMount({
-              ...props.bundling,
-              sourcePath: this.sourcePath,
-              bundleDir,
-            }).run();
-          }
-
-          finalSourcePath = bundleDir;
-        } catch (err) {
-          fs.rmSync(bundleDir, { recursive: true, force: true });
-          throw err;
-        }
-      }
+      // Scratch lives in the system temp dir, never in assetOutdir, so a crash
+      // cannot leave non-asset entries in the output tree.
+      scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), "cdktn-bundle-"));
+      finalSourcePath = this.bundle(props, scratchDir);
     }
 
-    this.assetHash = this.calculateHash(hashType, props, finalSourcePath);
+    try {
+      const bundlingOutputType =
+        props.bundling?.outputType ?? BundlingOutput.AUTO_DISCOVER;
 
-    // Stage the asset
-    const extension = this.getExtension(finalSourcePath);
-    const targetPath = path.resolve(
-      this.assetOutdir,
-      `asset.${this.assetHash}${extension}`,
-    );
+      // Packaging must resolve before hashing: it selects the archive framing
+      // of the hash, and it narrows finalSourcePath to the actual output file,
+      // which sets the staged extension.
+      const resolved = this.resolvePackaging(
+        props,
+        finalSourcePath,
+        bundlingOutputType,
+      );
+      this.packaging = resolved.packaging;
+      this.isArchive = resolved.isArchive;
+      finalSourcePath = resolved.finalSourcePath;
 
-    this.absoluteStagedPath = targetPath;
+      this.assetHash = this.calculateHash(hashType, props, finalSourcePath);
 
-    // Determine packaging based on bundling output type
-    const bundlingOutputType =
-      props.bundling?.outputType ?? BundlingOutput.AUTO_DISCOVER;
+      const extension = this.getExtension(finalSourcePath);
+      this.absoluteStagedPath = path.resolve(
+        this.assetOutdir,
+        `asset.${this.assetHash}${extension}`,
+      );
 
+      this.copyAsset(finalSourcePath, this.absoluteStagedPath);
+
+      stagingCache.set(cacheKey, {
+        assetHash: this.assetHash,
+        packaging: this.packaging,
+        isArchive: this.isArchive,
+        absoluteStagedPath: this.absoluteStagedPath,
+        finalSourcePath,
+      });
+    } finally {
+      if (scratchDir) {
+        fs.rmSync(scratchDir, { recursive: true, force: true });
+      }
+    }
+  }
+
+  /**
+   * Resolve where staged assets are written. The app's own outdir wins so that
+   * concurrent synths of different apps cannot collide; the `cdktf.json` walk
+   * remains as a fallback for trees built without an `App`.
+   */
+  private determineAssetOutdir(): string {
+    const app = this.node.root;
+    if ("outdir" in app && typeof (app as any).outdir === "string") {
+      return path.join((app as any).outdir, "assets");
+    }
+
+    const cdktfJsonPath = this.findCdktfJson();
+    if (cdktfJsonPath) {
+      return path.join(path.dirname(cdktfJsonPath), "cdktf.out", "assets");
+    }
+
+    return path.join("cdktf.out", "assets");
+  }
+
+  /**
+   * Run the bundler into `bundleDir`, preferring a local bundler when it
+   * reports that it handled the asset.
+   * @returns the directory holding the bundling output
+   */
+  private bundle(props: AssetStagingProps, bundleDir: string): string {
+    if (props.bundling!.local?.tryBundle(bundleDir, props.bundling!)) {
+      return bundleDir;
+    }
+
+    process.stdout.write(`Bundling asset ${this.node.path}...\n`);
+
+    const fileAccess =
+      props.bundling!.bundlingFileAccess ?? BundlingFileAccess.BIND_MOUNT;
+    const bundlingProps = {
+      ...props.bundling!,
+      sourcePath: this.sourcePath,
+      bundleDir,
+      scope: this,
+    };
+
+    if (fileAccess === BundlingFileAccess.VOLUME_COPY) {
+      new AssetBundlingVolumeCopy(bundlingProps).run();
+    } else {
+      new AssetBundlingBindMount(bundlingProps).run();
+    }
+
+    return bundleDir;
+  }
+
+  /**
+   * Decide how the asset is packaged, validating the bundling output against
+   * the requested {@link BundlingOutput}.
+   * @returns the resolved packaging plus the path to stage, narrowed to a
+   * single file where applicable
+   */
+  private resolvePackaging(
+    props: AssetStagingProps,
+    sourcePath: string,
+    bundlingOutputType: BundlingOutput,
+  ): ResolvedPackaging {
+    let packaging: FileAssetPackaging;
+    let isArchive: boolean;
+    let finalSourcePath = sourcePath;
     if (props.bundling) {
       const bundledStat = fs.statSync(finalSourcePath);
 
@@ -251,13 +348,13 @@ export class AssetStaging extends Construct {
               bundlingOutputType === BundlingOutput.AUTO_DISCOVER ||
               bundlingOutputType === BundlingOutput.ARCHIVED
             ) {
-              this.packaging = FileAssetPackaging.FILE;
-              this.isArchive = true;
+              packaging = FileAssetPackaging.FILE;
+              isArchive = true;
               finalSourcePath = singleFile;
             } else {
               // NOT_ARCHIVED: treat as directory to zip
-              this.packaging = FileAssetPackaging.ZIP_DIRECTORY;
-              this.isArchive = false;
+              packaging = FileAssetPackaging.ZIP_DIRECTORY;
+              isArchive = false;
             }
           } else if (singleStat.isFile()) {
             // Single non-archive file found
@@ -272,18 +369,18 @@ export class AssetStaging extends Construct {
             }
 
             if (bundlingOutputType === BundlingOutput.SINGLE_FILE) {
-              this.packaging = FileAssetPackaging.FILE;
-              this.isArchive = false;
+              packaging = FileAssetPackaging.FILE;
+              isArchive = false;
               finalSourcePath = singleFile;
             } else {
               // AUTO_DISCOVER or NOT_ARCHIVED: zip it
-              this.packaging = FileAssetPackaging.ZIP_DIRECTORY;
-              this.isArchive = false;
+              packaging = FileAssetPackaging.ZIP_DIRECTORY;
+              isArchive = false;
             }
           } else {
             // Single directory or other non-file - always zip
-            this.packaging = FileAssetPackaging.ZIP_DIRECTORY;
-            this.isArchive = false;
+            packaging = FileAssetPackaging.ZIP_DIRECTORY;
+            isArchive = false;
           }
         } else {
           // Multiple files
@@ -306,27 +403,26 @@ export class AssetStaging extends Construct {
           }
 
           // AUTO_DISCOVER or NOT_ARCHIVED: zip everything
-          this.packaging = FileAssetPackaging.ZIP_DIRECTORY;
-          this.isArchive = false;
+          packaging = FileAssetPackaging.ZIP_DIRECTORY;
+          isArchive = false;
         }
       } else {
         // Single file output (bundling directly produced a file, not a directory)
-        this.packaging = FileAssetPackaging.FILE;
-        this.isArchive = this.isArchiveExtension(extension);
+        packaging = FileAssetPackaging.FILE;
+        isArchive = this.isArchiveExtension(this.getExtension(finalSourcePath));
       }
     } else {
       // No bundling - simple case
       if (this.sourceStats.isDirectory()) {
-        this.packaging = FileAssetPackaging.ZIP_DIRECTORY;
-        this.isArchive = true;
+        packaging = FileAssetPackaging.ZIP_DIRECTORY;
+        isArchive = true;
       } else {
-        this.packaging = FileAssetPackaging.FILE;
-        this.isArchive = this.isArchiveExtension(extension);
+        packaging = FileAssetPackaging.FILE;
+        isArchive = this.isArchiveExtension(this.getExtension(finalSourcePath));
       }
     }
 
-    // Copy if needed
-    this.copyAsset(finalSourcePath, targetPath, props.exclude);
+    return { packaging, isArchive, finalSourcePath };
   }
 
   private findCdktfJson(): string | null {
@@ -369,236 +465,60 @@ export class AssetStaging extends Construct {
     sourcePath?: string,
   ): string {
     if (hashType === AssetHashType.CUSTOM) {
-      // Use custom hash verbatim (matches TerraformAsset behavior)
+      // Used verbatim (matching TerraformAsset), so it must be safe as a path
+      // segment of the staged file name.
+      if (!SAFE_ASSET_HASH.test(props.assetHash!)) {
+        throw assetHashInvalid(this.node.path, props.assetHash!);
+      }
       return props.assetHash!;
     }
 
-    // For SOURCE hash, use the original source path (not the bundled output)
-    // For OUTPUT hash, use the bundled output path
+    // SOURCE hashes the original tree; OUTPUT hashes the bundling result.
     const pathToHash =
       hashType === AssetHashType.SOURCE
         ? this.sourcePath
         : sourcePath || this.sourcePath;
 
-    // Determine canonical mode from context (respects canonicalAssetHashes feature flag)
-    const canonical = !!this.node.tryGetContext(CANONICAL_ASSET_HASHES);
+    const baseHash = fsHashPath(pathToHash, {
+      canonical: !!this.node.tryGetContext(CANONICAL_ASSET_HASHES),
+      archive: this.packaging === FileAssetPackaging.ZIP_DIRECTORY,
+      // OUTPUT hashes the already-filtered bundling output, so re-applying the
+      // source exclusions there would be wrong.
+      shouldExclude:
+        hashType === AssetHashType.SOURCE ? this.shouldExclude : undefined,
+    });
 
-    // Determine if this is an archive for hash framing
-    const isArchive = this.packaging === FileAssetPackaging.ZIP_DIRECTORY;
-
-    // Use unified hashPath from fs.ts - respects canonicalAssetHashes flag
-    let baseHash: string;
-    const exclude = props.exclude || [];
-
-    if (exclude.length === 0) {
-      // No exclusions - use fsHashPath directly
-      baseHash = fsHashPath(pathToHash, { canonical, archive: isArchive });
-    } else {
-      // With exclusions - use inline walker with same algorithm
-      baseHash = this.hashPathWithExclusions(
-        pathToHash,
-        exclude,
-        canonical,
-        isArchive,
-      );
-    }
-
-    // Add salt from context if present
     const salt = this.node.tryGetContext(ASSET_SALT_CONTEXT_KEY);
-    if (salt) {
-      const salted = crypto.createHash("md5");
-      salted.update(baseHash);
-      salted.update(salt);
-      return salted.digest("hex").slice(0, 32).toUpperCase();
+    if (!salt && !props.extraHash) {
+      return baseHash;
     }
 
-    // Add extra hash if provided
-    if (props.extraHash) {
-      const extra = crypto.createHash("md5");
-      extra.update(baseHash);
-      extra.update(props.extraHash);
-      return extra.digest("hex").slice(0, 32).toUpperCase();
-    }
-
-    return baseHash;
+    // Both fold into the digest: a salt must not mask an extraHash bump.
+    const combined = crypto.createHash("md5").update(baseHash);
+    if (props.extraHash) combined.update(props.extraHash);
+    if (salt) combined.update(salt);
+    return combined.digest("hex").slice(0, 32).toUpperCase();
   }
 
-  private hashPathWithExclusions(
-    sourcePath: string,
-    exclude: string[],
-    canonical: boolean,
-    isArchive: boolean,
-  ): string {
-    // With exclusions, filter the tree manually using the same algorithm as fs.ts
-    // This maintains exact compatibility with hashPath behavior
-
-    if (canonical) {
-      return this.canonicalHashWithExclusions(sourcePath, exclude, isArchive);
-    } else {
-      return this.legacyHashWithExclusions(sourcePath, exclude);
-    }
-  }
-
-  private legacyHashWithExclusions(
-    sourcePath: string,
-    exclude: string[],
-  ): string {
-    const content = crypto.createHash("md5");
-    const links = crypto.createHash("md5");
-    let linkCount = 0;
-
-    const walk = (p: string, relPath: string, isRoot = false) => {
-      const stat = isRoot ? fs.statSync(p) : fs.lstatSync(p);
-
-      if (stat.isSymbolicLink()) {
-        links.update(`${relPath}\0${fs.readlinkSync(p)}\0`);
-        linkCount++;
-      } else if (stat.isFile()) {
-        content.update(fs.readFileSync(p));
-      } else if (stat.isDirectory()) {
-        for (const entry of fs.readdirSync(p).sort()) {
-          const fullPath = path.join(p, entry);
-          const entryRelPath = relPath ? `${relPath}/${entry}` : entry;
-
-          // Check if excluded
-          if (this.shouldExclude(entryRelPath, exclude)) {
-            continue;
-          }
-
-          walk(fullPath, entryRelPath);
-        }
-      }
-    };
-
-    walk(sourcePath, "", true);
-
-    let digest: string;
-    if (linkCount === 0) {
-      digest = content.digest("hex");
-    } else {
-      const outer = crypto.createHash("md5");
-      outer.update("cdktn/asset-hash/symlinks/v1\0");
-      outer.update(content.digest("hex"));
-      outer.update(links.digest("hex"));
-      digest = outer.digest("hex");
-    }
-
-    return digest.slice(0, 32).toUpperCase();
-  }
-
-  private canonicalHashWithExclusions(
-    sourcePath: string,
-    exclude: string[],
-    includeDirectories: boolean,
-  ): string {
-    const hash = crypto.createHash("md5");
-    const PERM_MASK = 0o7777;
-
-    const walk = (p: string, relPath: string, isRoot = false) => {
-      const stat = isRoot ? fs.statSync(p) : fs.lstatSync(p);
-      const mode = (stat.mode & PERM_MASK).toString(8);
-
-      if (stat.isSymbolicLink()) {
-        const target = fs.readlinkSync(p);
-        hash.update(`L ${mode} ${relPath}\0${Buffer.byteLength(target)}\0`);
-        hash.update(target);
-      } else if (stat.isFile()) {
-        const data = fs.readFileSync(p);
-        hash.update(`F ${mode} ${relPath}\0${data.length}\0`);
-        hash.update(data);
-      } else if (stat.isDirectory()) {
-        if (relPath && includeDirectories) {
-          hash.update(`D ${relPath}\0`);
-        }
-        for (const entry of fs.readdirSync(p).sort()) {
-          const fullPath = path.join(p, entry);
-          const entryRelPath = relPath ? `${relPath}/${entry}` : entry;
-
-          // Check if excluded
-          if (this.shouldExclude(entryRelPath, exclude)) {
-            continue;
-          }
-
-          walk(fullPath, entryRelPath);
-        }
-      }
-    };
-
-    walk(sourcePath, "", true);
-
-    return hash.digest("hex").slice(0, 32).toUpperCase();
-  }
-
-  private shouldExclude(relativePath: string, exclude: string[]): boolean {
-    if (exclude.length === 0) return false;
-
-    for (const pattern of exclude) {
-      // Simple glob matching - exact match or wildcard
-      if (pattern === relativePath) return true;
-
-      // *.ext pattern
-      if (pattern.startsWith("*.")) {
-        const ext = pattern.substring(1);
-        if (relativePath.endsWith(ext)) return true;
-      }
-
-      // directory/ pattern
-      if (pattern.endsWith("/") && relativePath.startsWith(pattern)) {
-        return true;
-      }
-
-      // exact directory name
-      if (
-        relativePath === pattern ||
-        relativePath.startsWith(pattern + path.sep)
-      ) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  private copyAsset(source: string, target: string, exclude: string[] = []) {
-    // Skip if already staged
+  /**
+   * Copy the resolved source into the staging directory. Skipped when the
+   * target already exists, since the path is content-keyed.
+   */
+  private copyAsset(source: string, target: string) {
     if (fs.existsSync(target)) return;
 
-    // Ensure target directory exists
-    const targetDir = path.dirname(target);
-    if (!fs.existsSync(targetDir)) {
-      fs.mkdirSync(targetDir, { recursive: true });
-    }
+    fs.mkdirSync(path.dirname(target), { recursive: true });
 
-    const stat = fs.statSync(source);
+    // lstat, not stat: a symlinked source file must be staged as a file rather
+    // than crashing when the link dangles.
+    const stat = fs.lstatSync(source);
 
-    if (stat.isFile()) {
+    if (stat.isDirectory()) {
+      copySync(source, target, { shouldExclude: this.shouldExclude });
+    } else if (stat.isSymbolicLink()) {
+      fs.symlinkSync(fs.readlinkSync(source), target);
+    } else {
       fs.copyFileSync(source, target);
-    } else if (stat.isDirectory()) {
-      fs.mkdirSync(target, { recursive: true });
-      this.copyDirectory(source, target, exclude);
-    }
-  }
-
-  private copyDirectory(source: string, target: string, exclude: string[]) {
-    const entries = fs.readdirSync(source);
-
-    for (const entry of entries) {
-      const sourcePath = path.join(source, entry);
-      const targetPath = path.join(target, entry);
-      const relativePath = path.relative(this.sourcePath, sourcePath);
-
-      if (this.shouldExclude(relativePath, exclude)) {
-        continue;
-      }
-
-      const stat = fs.statSync(sourcePath);
-
-      if (stat.isFile()) {
-        fs.copyFileSync(sourcePath, targetPath);
-      } else if (stat.isDirectory()) {
-        fs.mkdirSync(targetPath, { recursive: true });
-        this.copyDirectory(sourcePath, targetPath, exclude);
-      }
     }
   }
 

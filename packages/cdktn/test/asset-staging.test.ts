@@ -12,6 +12,7 @@ import {
   Testing,
 } from "../lib";
 import { CANONICAL_ASSET_HASHES } from "../lib/features";
+import { hashPath } from "../lib/private/fs";
 
 describe("AssetStaging", () => {
   let tempDir: string;
@@ -778,7 +779,7 @@ describe("AssetStaging", () => {
   });
 
   describe("canonical hash feature flag", () => {
-    test("reads canonicalAssetHashes feature flag correctly when enabled", () => {
+    test("uses the canonical scheme when the flag is enabled", () => {
       // GIVEN
       const app = Testing.app({
         context: {
@@ -795,31 +796,40 @@ describe("AssetStaging", () => {
         sourcePath: sourceDir,
       });
 
-      // THEN - should use canonical hashing when flag is enabled
-      expect(staging.assetHash).toBeDefined();
-      expect(staging.assetHash.length).toBeGreaterThan(0);
+      // THEN - the exact canonical digest, framed as the archive that a
+      // directory asset is emitted as; not merely "some hash".
+      expect(staging.assetHash).toBe(
+        hashPath(sourceDir, { canonical: true, archive: true }),
+      );
+      expect(staging.assetHash).not.toBe(
+        hashPath(sourceDir, { canonical: false, archive: true }),
+      );
     });
 
-    test("respects disabled canonicalAssetHashes flag", () => {
-      // GIVEN
+    test("the canonical scheme distinguishes trees the legacy scheme cannot", () => {
+      // GIVEN two trees with identical file contents but different names,
+      // which the legacy content-concatenation hash cannot tell apart.
       const app = Testing.app({
-        context: {
-          [CANONICAL_ASSET_HASHES]: "false",
-        },
+        context: { [CANONICAL_ASSET_HASHES]: "true" },
       });
       const stack = new TerraformStack(app, "Stack");
-      const sourceDir = path.join(tempDir, "source");
-      fs.mkdirSync(sourceDir);
-      fs.writeFileSync(path.join(sourceDir, "file.txt"), "content");
+
+      const a = path.join(tempDir, "a");
+      fs.mkdirSync(a);
+      fs.writeFileSync(path.join(a, "one.txt"), "same");
+      const b = path.join(tempDir, "b");
+      fs.mkdirSync(b);
+      fs.writeFileSync(path.join(b, "two.txt"), "same");
 
       // WHEN
-      const staging = new AssetStaging(stack, "Asset", {
-        sourcePath: sourceDir,
-      });
+      const first = new AssetStaging(stack, "A", { sourcePath: a });
+      const second = new AssetStaging(stack, "B", { sourcePath: b });
 
-      // THEN - should work with legacy hashing
-      expect(staging.assetHash).toBeDefined();
-      expect(staging.assetHash.length).toBeGreaterThan(0);
+      // THEN
+      expect(first.assetHash).not.toBe(second.assetHash);
+      expect(hashPath(a, { canonical: false })).toBe(
+        hashPath(b, { canonical: false }),
+      );
     });
 
     test("uses feature flag constant not hardcoded string", () => {
