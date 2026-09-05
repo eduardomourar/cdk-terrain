@@ -3,6 +3,7 @@
 
 import * as fs from "fs";
 import { archiveSync, copySync } from "./private/fs";
+import { IIgnoreStrategy } from "./ignore-strategy";
 
 /**
  * Common interface for all assets.
@@ -103,11 +104,38 @@ export interface IAssetPackaging {
 
   /**
    * Perform the staging transformation, writing the packaged result to
-   * `target`.
-   * @param source - path to the resolved (already bundled, if applicable) source
-   * @param target - path the packaged result should be written to
+   * `options.target`.
+   * @param options - see {@link PackOptions}
    */
-  pack(source: string, target: string): void;
+  pack(options: PackOptions): void;
+}
+
+/**
+ * Options for {@link IAssetPackaging.pack}.
+ *
+ * A struct rather than positional parameters: adding a struct field is
+ * additive, adding a method parameter is not, and `pack` is called through
+ * JSII where that distinction is a breaking-change boundary.
+ */
+export interface PackOptions {
+  /**
+   * Path to the resolved (already bundled, if applicable) source.
+   */
+  readonly source: string;
+
+  /**
+   * Path the packaged result should be written to.
+   */
+  readonly target: string;
+
+  /**
+   * Entries to omit from the packaged result. Must match the strategy used
+   * to hash the same source, or the hash and the artifact describe
+   * different sets of files.
+   *
+   * @default - nothing is excluded
+   */
+  readonly ignoreStrategy?: IIgnoreStrategy;
 }
 
 /**
@@ -116,8 +144,8 @@ export interface IAssetPackaging {
 class FilePackaging implements IAssetPackaging {
   public readonly extension = "";
   public readonly producesDirectory = false;
-  public pack(source: string, target: string): void {
-    fs.copyFileSync(source, target);
+  public pack(options: PackOptions): void {
+    fs.copyFileSync(options.source, options.target);
   }
 }
 
@@ -127,8 +155,12 @@ class FilePackaging implements IAssetPackaging {
 class DirectoryPackaging implements IAssetPackaging {
   public readonly extension = "";
   public readonly producesDirectory = true;
-  public pack(source: string, target: string): void {
-    copySync(source, target);
+  public pack(options: PackOptions): void {
+    copySync(options.source, options.target, {
+      shouldExclude: options.ignoreStrategy
+        ? (relativePath) => options.ignoreStrategy!.ignores(relativePath)
+        : undefined,
+    });
   }
 }
 
@@ -138,8 +170,14 @@ class DirectoryPackaging implements IAssetPackaging {
 class ZipPackaging implements IAssetPackaging {
   public readonly extension = ".zip";
   public readonly producesDirectory = false;
-  public pack(source: string, target: string): void {
-    archiveSync(source, target);
+  public pack(options: PackOptions): void {
+    archiveSync(
+      options.source,
+      options.target,
+      options.ignoreStrategy
+        ? (relativePath) => options.ignoreStrategy!.ignores(relativePath)
+        : undefined,
+    );
   }
 }
 

@@ -101,8 +101,13 @@ export function copySync(
  * Zips contents at src and places zip archive at dest.
  * @param src - directory to archive
  * @param dest - path to write the resulting zip to
+ * @param shouldExclude - entries to omit, see {@link CopySyncOptions.shouldExclude}
  */
-export function archiveSync(src: string, dest: string) {
+export function archiveSync(
+  src: string,
+  dest: string,
+  shouldExclude?: ExcludePredicate,
+) {
   try {
     const files: Record<string, [Uint8Array, ZipOptions]> = {};
     const walk = (dir: string, prefix: string) => {
@@ -111,6 +116,9 @@ export function archiveSync(src: string, dest: string) {
       for (const entry of fs.readdirSync(dir).sort()) {
         const full = path.join(dir, entry);
         const zipPath = prefix ? `${prefix}/${entry}` : entry;
+        if (shouldExclude?.(zipPath)) {
+          continue;
+        }
         const stat = fs.lstatSync(full);
         if (stat.isSymbolicLink()) {
           // Store the link target as the entry data with S_IFLNK attrs so

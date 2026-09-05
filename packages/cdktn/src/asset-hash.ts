@@ -4,14 +4,16 @@ import * as crypto from "crypto";
 import * as path from "path";
 import { hashPath } from "./private/fs";
 import { ExcludeIgnoreStrategy, IIgnoreStrategy } from "./ignore-strategy";
+import { assetHashConflictingExcludeOptions } from "./errors";
 
 /**
  * Options for {@link AssetHash.of}.
  */
 export interface AssetHashOptions {
   /**
-   * Paths to exclude, relative to the hashed path. Ignored if
-   * `ignoreStrategy` is given.
+   * Paths to exclude, relative to the hashed path. Cannot be combined with
+   * `ignoreStrategy`, which replaces this matcher rather than layering on
+   * top of it.
    *
    * @default - nothing is excluded
    */
@@ -48,12 +50,20 @@ export class AssetHash {
    * @param options - see {@link AssetHashOptions}
    */
   public static of(filePath: string, options: AssetHashOptions = {}): string {
+    if (options.exclude && options.ignoreStrategy) {
+      throw assetHashConflictingExcludeOptions();
+    }
+
     const resolved = path.resolve(filePath);
     const strategy =
       options.ignoreStrategy ??
       new ExcludeIgnoreStrategy(options.exclude ?? []);
 
+    // Pinned to the canonical scheme: this is a brand-new API with no
+    // existing hashes to preserve, so it has no reason to start on the
+    // legacy scheme that `canonicalAssetHashes` exists to move away from.
     const baseHash = hashPath(resolved, {
+      canonical: true,
       shouldExclude: (relativePath) => strategy.ignores(relativePath),
     });
 

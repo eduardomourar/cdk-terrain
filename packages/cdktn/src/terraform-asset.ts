@@ -163,6 +163,6 @@ export class TerraformAsset extends Construct {
     if (!packaging) {
       throw assetTypeNotImplemented();
     }
-    packaging.pack(this.sourcePath, targetPath);
+    packaging.pack({ source: this.sourcePath, target: targetPath });
   }
 }
