@@ -95,24 +95,38 @@ export class TestDriver {
     command: string,
     args: string[] = [],
     cwd?: string,
+    timeoutMs = 4 * 60 * 1000,
   ): Promise<{ stdout: string; stderr: string }> {
     try {
       return await new Promise((resolve, reject) => {
         const stdout: string[] = [],
           stderr: string[] = [];
-        const process = spawn(command, args, {
+        const child = spawn(command, args, {
           shell: true,
           stdio: "pipe",
           env: this.env,
           cwd,
         });
-        process.stdout.on("data", (data) => {
+        // A stalled command (e.g. a registry that stops responding) otherwise
+        // leaves its stdio pipes open forever, which keeps Jest's event loop
+        // alive well past the hook/test timeout and burns the CI job's full
+        // 1h budget before GitHub kills it instead of failing fast here.
+        const timer = setTimeout(() => {
+          child.kill("SIGKILL");
+          reject(
+            new Error(
+              `spawned command ${command} with args ${args} timed out after ${timeoutMs}ms`,
+            ),
+          );
+        }, timeoutMs);
+        child.stdout.on("data", (data) => {
           stdout.push(data.toString());
         });
-        process.stderr.on("data", (data) => {
+        child.stderr.on("data", (data) => {
           stderr.push(data.toString());
         });
-        process.on("close", (code) => {
+        child.on("close", (code) => {
+          clearTimeout(timer);
           if (code === 0) {
             resolve({
               stdout: stripAnsi(stdout.join("\n")),
