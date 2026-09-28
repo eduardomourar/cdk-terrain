@@ -12,6 +12,7 @@ import {
   AssetType,
   AssetHash,
   AssetHashType,
+  BundleResult,
   IAsset,
 } from "../src";
 import { CANONICAL_ASSET_HASHES } from "../src/features";
@@ -302,10 +303,9 @@ describe("TerraformAsset with the canonicalAssetHashes flag", () => {
     expect(asset.assetHash).not.toBe(canonical(srcDir));
   });
 
-  // Pins the relationship between AssetHash.of (a packaging-independent
-  // source-tree identity) and TerraformAsset (whose framing depends on type).
-  // The subdirectory matters: it is what makes DIRECTORY and ARCHIVE framing
-  // diverge, since ARCHIVE omits directory records.
+  // AssetHash.of is packaging-independent; TerraformAsset framing depends on
+  // type. The subdirectory makes DIRECTORY and ARCHIVE framing diverge, since
+  // ARCHIVE omits directory records.
   describe("AssetHash.of relationship to TerraformAsset", () => {
     beforeEach(() => {
       fs.mkdirSync(path.join(srcDir, "sub"));
@@ -465,10 +465,9 @@ describe("TerraformAsset assetHashType", () => {
   });
 
   test("a resolved assetHash with unsafe characters throws, even with no exclude/extraHash set", () => {
-    // TerraformAsset always routes through AssetStaging, so this path (no
-    // advanced options) gets the same safety check as the exclude/extraHash
-    // path — an assetHash is used as a path segment in `TerraformAsset.path`,
-    // so an unsafe one could otherwise escape the assets directory at synth.
+    // An assetHash is a path segment in `TerraformAsset.path`, so an unsafe
+    // one could escape the assets directory at synth; the check must apply
+    // even with no exclude/extraHash set.
     expect(
       () =>
         new TerraformAsset(stack(), "asset", {
@@ -612,13 +611,140 @@ describe("TerraformAsset artifact layout derives from the packaging", () => {
     });
 
     // ZipPackaging.extension is ".zip", so the artifact is archive.zip -
-    // unchanged from before the wiring, but now derived rather than hardcoded.
+    // unchanged from before, but now derived rather than hardcoded.
     expect(asset.fileName).toBe("archive.zip");
     expect(asset.path.endsWith("/archive.zip")).toBe(true);
   });
 
-  test("an invalid type is rejected before the bundler runs", () => {
-    let bundled = false;
+  test("a directory source with a file-producing bundler is accepted", () => {
+    // With a bundler in play, the source shape no longer has to match the
+    // type, so construction does not reject a directory source with FILE.
+    expect(
+      () =>
+        new TerraformAsset(stack(), "asset", {
+          path: srcDir,
+          type: AssetType.FILE,
+          bundler: {
+            bundle: (opts) => {
+              const archive = path.join(opts.outputDir, "archive.zip");
+              fs.writeFileSync(archive, "zip-bytes");
+              return BundleResult.file(archive);
+            },
+          },
+        }),
+    ).not.toThrow();
+  });
+
+  test("a file-producing bundler names the artifact from outputFileName", () => {
+    const s = stack();
+    const asset = new TerraformAsset(s, "asset", {
+      path: srcDir,
+      type: AssetType.FILE,
+      bundler: {
+        outputFileName: "archive.zip",
+        bundle: (opts) => {
+          // The runtime name differs from the declared one; the staged name
+          // comes from outputFileName, not this temp path.
+          const built = path.join(opts.outputDir, "build-output-xyz.zip");
+          fs.writeFileSync(built, "zip-bytes");
+          return BundleResult.file(built);
+        },
+      },
+    });
+
+    expect(asset.fileName).toBe("archive.zip");
+    expect(asset.path.endsWith("/archive.zip")).toBe(true);
+
+    const outdir = Testing.fullSynth(s);
+    const stagedFile = path.join(outdir, "stacks", s.node.id, asset.path);
+    expect(fs.existsSync(stagedFile)).toBe(true);
+    expect(fs.readFileSync(stagedFile, "utf-8")).toBe("zip-bytes");
+  });
+
+  test("a file-producing bundler without outputFileName falls back to the source basename", () => {
+    const asset = new TerraformAsset(stack(), "asset", {
+      path: srcFile,
+      type: AssetType.FILE,
+      bundler: {
+        bundle: (opts) => {
+          const built = path.join(opts.outputDir, "whatever.bin");
+          fs.writeFileSync(built, "bytes");
+          return BundleResult.file(built);
+        },
+      },
+    });
+
+    // No outputFileName: the source basename ("a.txt") is used as before.
+    expect(asset.fileName).toBe("a.txt");
+  });
+
+  // outputFileName becomes a path segment under the asset's hash directory, so
+  // an unsafe value could escape the stack dir or overwrite the just-cleaned
+  // named folder. A buggy bundler is the realistic source, not an attacker.
+  test.each([
+    ["a traversal segment", "../../../../outside-stack.bin"],
+    ["a bare parent ref", ".."],
+    ["a current-dir ref", "."],
+    ["an empty name", ""],
+    ["a posix-absolute path", "/etc/evil.bin"],
+    ["a nested path", "nested/archive.zip"],
+    ["a windows path", "C:\\evil.bin"],
+    ["a backslash segment", "..\\..\\evil.bin"],
+  ])("outputFileName rejects %s", (_label, outputFileName) => {
+    expect(
+      () =>
+        new TerraformAsset(stack(), "asset", {
+          path: srcFile,
+          type: AssetType.FILE,
+          bundler: {
+            outputFileName,
+            bundle: (opts) => {
+              const built = path.join(opts.outputDir, "built.bin");
+              fs.writeFileSync(built, "bytes");
+              return BundleResult.file(built);
+            },
+          },
+        }),
+    ).toThrow(/invalid outputFileName/i);
+  });
+
+  test("outputFileName accepts a plain file name with dots", () => {
+    expect(
+      () =>
+        new TerraformAsset(stack(), "asset", {
+          path: srcFile,
+          type: AssetType.FILE,
+          bundler: {
+            outputFileName: "archive.tar.gz",
+            bundle: (opts) => {
+              const built = path.join(opts.outputDir, "built.bin");
+              fs.writeFileSync(built, "bytes");
+              return BundleResult.file(built);
+            },
+          },
+        }),
+    ).not.toThrow();
+  });
+
+  test("a bundler declaring outputFileName with non-FILE packaging is rejected at construction", () => {
+    // outputFileName announces FILE output statically, so the mismatch is
+    // caught before the (possibly slow) build runs, not inside stage().
+    expect(
+      () =>
+        new TerraformAsset(stack(), "asset", {
+          path: srcDir,
+          type: AssetType.DIRECTORY,
+          bundler: {
+            outputFileName: "archive.zip",
+            bundle: (opts) => BundleResult.directory(opts.outputDir),
+          },
+        }),
+    ).toThrow(/AssetType\.FILE|single-file/i);
+  });
+
+  test("a directory-producing bundler with FILE packaging is rejected", () => {
+    // OUTPUT hashing builds eagerly in the constructor, so the shape mismatch
+    // (directory output, single-file packaging) surfaces there.
     expect(
       () =>
         new TerraformAsset(stack(), "asset", {
@@ -626,16 +752,10 @@ describe("TerraformAsset artifact layout derives from the packaging", () => {
           type: AssetType.FILE,
           assetHashType: AssetHashType.OUTPUT,
           bundler: {
-            bundle: (opts) => {
-              bundled = true;
-              return opts.outputDir;
-            },
+            bundle: (opts) => BundleResult.directory(opts.outputDir),
           },
         }),
-    ).toThrow(/directory/i);
-
-    // The type/source mismatch is caught before staging, so no eager build ran.
-    expect(bundled).toBe(false);
+    ).toThrow(/AssetType\.DIRECTORY|AssetType\.ARCHIVE|single file/i);
   });
 });
 

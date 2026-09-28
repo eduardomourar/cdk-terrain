@@ -95,14 +95,6 @@ Place a cdktf.json at the root of your project, or pass an absolute path. Learn 
 `,
   );
 
-export const assetFilePackagingWithBundlerUnsupported = (id: string) =>
-  new Error(
-    `TerraformAsset ${id} was configured with a 'bundler' and file packaging (AssetType.FILE). A bundler produces a directory of output, which cannot be staged as a single file.
-
-Use AssetType.ARCHIVE to zip the bundler's output, or AssetType.DIRECTORY to stage it as a tree.
-Learn more about TerraformAsset: https://cdktn.io/docs/concepts/assets`,
-  );
-
 export const assetHashInvalid = (id: string, assetHash: string) =>
   new Error(
     `TerraformAsset ${id} resolved an 'assetHash' of '${assetHash}', but it names the staged asset file and so may only contain letters, digits, '_', '.' and '-'.
@@ -114,7 +106,30 @@ export const assetStagingBundlerOutputNotDirectory = (
   produced: string,
 ) =>
   new Error(
-    `TerraformAsset ${id}'s bundler returned '${produced}', which is not a directory. A bundler must write its output into 'options.outputDir' and return that directory (or a subdirectory of it); the returned tree is then packaged.
+    `TerraformAsset ${id}'s bundler returned a directory result at '${produced}', which is not a directory. Return 'BundleResult.file(...)' for a single-file artifact, or write a directory into 'options.outputDir' and return 'BundleResult.directory(...)'.
+Learn more about TerraformAsset: https://cdktn.io/docs/concepts/assets`,
+  );
+
+export const assetStagingBundlerOutputNotFile = (
+  id: string,
+  produced: string,
+) =>
+  new Error(
+    `TerraformAsset ${id}'s bundler returned a file result at '${produced}', which is not a file. Return 'BundleResult.directory(...)' for a directory artifact, or write a single file into 'options.outputDir' and return 'BundleResult.file(...)'.
+Learn more about TerraformAsset: https://cdktn.io/docs/concepts/assets`,
+  );
+
+export const assetStagingBundlerFileOutputNeedsFilePackaging = (id: string) =>
+  new Error(
+    `TerraformAsset ${id}'s bundler produced a single-file artifact (BundleResult.file), which stages verbatim and so needs AssetType.FILE. Use AssetType.FILE for a file-producing bundler, or have the bundler return a directory (BundleResult.directory) for AssetType.DIRECTORY or AssetType.ARCHIVE.
+Learn more about TerraformAsset: https://cdktn.io/docs/concepts/assets`,
+  );
+
+export const assetStagingBundlerDirectoryOutputNeedsDirectoryPackaging = (
+  id: string,
+) =>
+  new Error(
+    `TerraformAsset ${id}'s bundler produced a directory artifact (BundleResult.directory), but AssetType.FILE stages a single file verbatim. Use AssetType.DIRECTORY or AssetType.ARCHIVE with a directory-producing bundler, or have the bundler return a single file (BundleResult.file) for AssetType.FILE.
 Learn more about TerraformAsset: https://cdktn.io/docs/concepts/assets`,
   );
 
@@ -122,6 +137,30 @@ export const assetStagingAlreadyStaged = (id: string) =>
   new Error(
     `TerraformAsset ${id} was already staged. An AssetStaging stages exactly once — its bundler output is captured on the first call and cannot be rebuilt or restaged.
 Learn more about TerraformAsset: https://cdktn.io/docs/concepts/assets`,
+  );
+
+export const assetBundlerOutputFileNameInvalid = (
+  id: string,
+  outputFileName: string,
+) =>
+  new Error(
+    `TerraformAsset ${id} was given a bundler with an invalid outputFileName '${outputFileName}'. It names the staged artifact file, so it must be a plain file name — not empty, '.', '..', absolute, or containing '/' or '\\'.
+Learn more about TerraformAsset: https://cdktn.io/docs/concepts/assets`,
+  );
+
+export const chainBundlerRequiresAtLeastOneBundler = () =>
+  new Error(
+    `ChainBundler.of() requires at least one bundler. At least one bundler must be able to run in this environment.`,
+  );
+
+export const chainBundlerConflictingOutputFileName = (names: string[]) =>
+  new Error(
+    `ChainBundler legs declare conflicting outputFileName values (${names.join(", ")}). The staged name is fixed before any leg runs, so all legs that set it must agree.`,
+  );
+
+export const chainBundlerAllDeclined = (tried: number) =>
+  new Error(
+    `Every bundler in the ChainBundler declined to run (${tried} tried). At least one must be able to run in this environment.`,
   );
 
 export const dynamicBlockNotSupported = (_foreachExpression: string) =>

@@ -2,6 +2,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import * as fs from "fs";
+import * as path from "path";
+import {
+  chainBundlerAllDeclined,
+  chainBundlerConflictingOutputFileName,
+  chainBundlerRequiresAtLeastOneBundler,
+} from "./errors";
 import { archiveSync, copySync } from "./private/fs";
 import { IIgnoreStrategy } from "./ignore-strategy";
 
@@ -10,15 +16,16 @@ import { IIgnoreStrategy } from "./ignore-strategy";
  */
 export interface IAsset {
   /**
-   * A hash of this asset, which is available at construction time. As this is a plain string, it
-   * can be used in construct IDs in order to enforce creation of a new resource when the content
-   * hash has changed.
+   * A hash of this asset, available at construction time.
+   *
+   * Being a plain string, it can be used in construct IDs to force a new
+   * resource when the content hash changes.
    */
   readonly assetHash: string;
 }
 
 /**
- * Asset hash options
+ * Options controlling how an asset's hash is derived.
  */
 export interface AssetOptions {
   /**
@@ -27,11 +34,9 @@ export interface AssetOptions {
    * hash, and because it names the staged asset file it may only contain
    * letters, digits, `_`, `.` and `-`.
    *
-   * NOTE: the hash is used in order to identify a specific revision of the asset, and
-   * used for optimizing and caching deployment activities related to this asset such as
-   * packaging, uploading to cloud storage, etc. If you chose to customize the hash, you will
-   * need to make sure it is updated every time the asset changes, or otherwise it is
-   * possible that some deployments will not be invalidated.
+   * The hash identifies a specific revision of the asset and caches deployment
+   * work (packaging, uploading). A custom hash must be updated whenever the
+   * asset changes, or some deployments will not be invalidated.
    *
    * @default - based on `assetHashType`
    */
@@ -50,31 +55,29 @@ export interface AssetOptions {
 }
 
 /**
- * The type of asset hash
+ * The type of asset hash.
  *
- * NOTE: the hash is used in order to identify a specific revision of the asset, and
- * used for optimizing and caching deployment activities related to this asset such as
- * packaging, uploading to cloud storage, etc.
+ * The hash identifies a specific revision of the asset and caches deployment
+ * work such as packaging and uploading.
  */
 export enum AssetHashType {
   /**
-   * Based on the content of the source path
+   * Based on the content of the source path.
    *
-   * Use `SOURCE` when the content of the asset changes frequently or when
-   * you want to track changes to the source files directly.
+   * Use `SOURCE` to track changes to the source files directly.
    */
   SOURCE = "source",
 
   /**
-   * Based on the content of the bundling output
+   * Based on the content of the bundling output.
    *
-   * Use `OUTPUT` when the source of the asset is a top level folder containing
-   * code and/or dependencies that are not directly linked to the asset.
+   * Use `OUTPUT` when the source is a top-level folder holding code and/or
+   * dependencies not directly linked to the asset.
    */
   OUTPUT = "output",
 
   /**
-   * Use a custom hash
+   * Use a custom hash.
    */
   CUSTOM = "custom",
 }
@@ -257,10 +260,90 @@ export interface BundleOptions {
   /**
    * A scratch directory the bundler may write into, owned and created by the
    * caller. The bundler produces its output here (or in a subdirectory) and
-   * returns the directory that holds the finished artifact — see
+   * returns a {@link BundleResult} pointing at the finished artifact — see
    * {@link IAssetBundler.bundle}.
    */
   readonly outputDir: string;
+}
+
+/**
+ * The shape of a bundler's output, so staging and packaging can treat a
+ * single-file artifact (a tarball, a `.zip`) differently from a directory
+ * tree without inferring it from the path.
+ */
+export enum BundleOutputType {
+  /**
+   * The output is a directory tree.
+   *
+   * Packaged like an unbundled source directory. The default, and the only
+   * shape that predates archive support.
+   */
+  DIRECTORY = "directory",
+
+  /**
+   * The output is a single file the bundler already produced in its final
+   * form.
+   *
+   * A tarball or a deterministic `.zip`. Staged verbatim rather than
+   * re-archived, so `AssetType.FILE` no longer has to reject a bundler.
+   */
+  FILE = "file",
+}
+
+/**
+ * What a bundler produced, returned from {@link IAssetBundler.bundle}.
+ *
+ * Carries the artifact path and its shape, or a declined state signalling the
+ * caller should fall back. See {@link declined} for the decline protocol.
+ */
+export class BundleResult {
+  /**
+   * A directory-tree artifact at `path`.
+   */
+  public static directory(path: string): BundleResult {
+    return new BundleResult(BundleOutputType.DIRECTORY, path, false);
+  }
+
+  /**
+   * A single-file artifact at `path` (a tarball, a `.zip`), staged verbatim.
+   */
+  public static file(path: string): BundleResult {
+    return new BundleResult(BundleOutputType.FILE, path, false);
+  }
+
+  /**
+   * The bundler declined to run here; the caller should fall back.
+   *
+   * Distinct from a thrown error, which is a hard failure.
+   */
+  public static declined(): BundleResult {
+    return new BundleResult(undefined, undefined, true);
+  }
+
+  /**
+   * The artifact's shape, or undefined when {@link isDeclined}.
+   */
+  public readonly outputType?: BundleOutputType;
+
+  /**
+   * The artifact path, or undefined when {@link isDeclined}.
+   */
+  public readonly path?: string;
+
+  /**
+   * Whether the bundler declined to run, signalling the caller to fall back.
+   */
+  public readonly isDeclined: boolean;
+
+  private constructor(
+    outputType: BundleOutputType | undefined,
+    path: string | undefined,
+    isDeclined: boolean,
+  ) {
+    this.outputType = outputType;
+    this.path = path;
+    this.isDeclined = isDeclined;
+  }
 }
 
 /**
@@ -268,33 +351,31 @@ export interface BundleOptions {
  * output is packaged and staged.
  *
  * This is the extension point for asset bundling: core ships no bundler.
- * Docker, esbuild, pip, `go build`, and similar are an open-ended set that
- * is not cloud-specific, so each lives in its own package and implements this
+ * Docker, esbuild, pip, `go build`, and similar are an open-ended, non
+ * cloud-specific set, so each lives in its own package and implements this
  * one interface — the same way {@link IIgnoreStrategy} lets richer exclusion
- * live outside core without core taking on a glob parser. A third party
- * develops a bundler by implementing this interface and publishing it as a
- * package; users pass an instance via the consuming construct's `bundler`
- * option.
+ * live outside core. Users pass an instance via the consuming construct's
+ * `bundler` option.
  *
  * `bundle` runs during the owning construct's `onSynthesize` hook and may
  * touch the filesystem. Deferring it there keeps it skippable when the asset's
  * stack is not being synthesized, which holds as long as the hash is taken
  * over the source rather than the built output.
+ *
+ * Bundlers compose through {@link ChainBundler} rather than a hierarchy: a
+ * bundler declines (see {@link BundleResult.declined}) instead of failing when
+ * it cannot run, and the chain falls through to the next.
  */
 export interface IAssetBundler {
   /**
    * A value identifying the build, folded into the asset hash.
    *
    * The source tree alone cannot see the build, so swapping a `node:18` base
-   * image for `node:20` would otherwise leave identity unchanged. A value
-   * capturing the build (e.g. `docker:<image>:<command>`) closes that gap.
-   *
-   * Under `SOURCE` hashing this is the only channel by which the build reaches
-   * identity, so it must serialize every input that can move the output —
-   * base image, command, tool version, environment, arguments. Anything left
-   * out means a changed build silently reuses a stale artifact. {@link
-   * BundlerKey} builds one from an ordered set of parts so the format is not
-   * reinvented per bundler.
+   * image for `node:20` would otherwise leave identity unchanged. Under
+   * `SOURCE` hashing this is the only channel by which the build reaches
+   * identity, so it must serialize every input that can move the output, or a
+   * changed build silently reuses a stale artifact. {@link BundlerKey} builds
+   * one from an ordered set of parts.
    *
    * Mirrors {@link IIgnoreStrategy.cacheKey}: omit it when the build cannot be
    * summarized as a string, and fall back to `extraHash`.
@@ -304,15 +385,34 @@ export interface IAssetBundler {
   readonly bundlerKey?: string;
 
   /**
-   * Produce the artifact and return the directory holding it.
+   * The name a single-file artifact is staged under (e.g. `archive.zip`).
    *
-   * Implementations write into `options.outputDir` and return it or a
-   * subdirectory, never writing back to `options.source`. The returned
-   * directory is then packaged as an unbundled source directory would be.
-   * Returning a file, or a path that does not exist, is rejected — the
-   * contract is a directory, and packaging always treats the result as one.
+   * A file-producing bundler (`BundleResult.file`) staged with
+   * `AssetType.FILE` would otherwise take the source path's basename, which is
+   * a directory name when the source is a directory. Declaring the name here
+   * lets the artifact reflect what the bundler produces. It is static
+   * configuration, needed at construction before a deferred `SOURCE` build
+   * runs, not the file's runtime name.
+   *
+   * Valid only for a file-producing bundler: setting it with a directory
+   * packaging (anything but `AssetType.FILE`) is rejected at construction.
+   *
+   * @default - the source path's basename
    */
-  bundle(options: BundleOptions): string;
+  readonly outputFileName?: string;
+
+  /**
+   * Produce the artifact and return a {@link BundleResult} describing it.
+   *
+   * Implementations write into `options.outputDir` and never write back to
+   * `options.source`. The returned path must exist and match its declared
+   * shape, or staging rejects it.
+   *
+   * A bundler that cannot run in this environment returns
+   * `BundleResult.declined()` so a {@link ChainBundler} can fall through to
+   * the next; a thrown error is a hard failure, not a decline.
+   */
+  bundle(options: BundleOptions): BundleResult;
 }
 
 /**
@@ -321,9 +421,8 @@ export interface IAssetBundler {
  * A `bundlerKey` has to serialize everything that can move a build's output;
  * done ad hoc, every bundler invents its own delimiter and forgets an input
  * differently. This gives the convention one implementation: parts are joined
- * with a separator that is escaped where it appears in a value, so distinct
- * inputs can never collide into the same key (`["a:b", "c"]` and
- * `["a", "b:c"]` stay different).
+ * with a separator that is escaped inside values, so distinct inputs cannot
+ * collide into the same key.
  *
  * @example
  * const key = BundlerKey.of("docker", image, command)
@@ -373,6 +472,84 @@ export class BundlerKey {
 }
 
 /**
+ * Composes bundlers into a "try each in order until one runs" chain.
+ *
+ * This is how a local bundler and a Docker bundler compose without being
+ * rewritten as one: each leg declines (`BundleResult.declined()`) when it
+ * cannot run here, and the chain moves to the next. The first non-declining
+ * result wins; if all decline, `bundle` throws, since staging has nothing to
+ * fall back to. Each leg builds into its own output directory, so a leg that
+ * writes before declining cannot leak partial files into the leg that wins.
+ *
+ * The chain's `bundlerKey` folds in *every* leg's key, so identity is the same
+ * regardless of which leg ends up running — a build that could have gone local
+ * or Docker is one asset, not two.
+ *
+ * This makes the legs interchangeable only if they produce equivalent output.
+ * Under `SOURCE` hashing they must: a machine with a host tool and one without
+ * run different legs, and non-equivalent legs would stage different bytes under
+ * the same hash. Use `OUTPUT` hashing when legs may diverge, so identity tracks
+ * the artifact each leg actually produced.
+ */
+export class ChainBundler implements IAssetBundler {
+  /**
+   * Chain bundlers in the order given; earlier bundlers are preferred.
+   */
+  public static of(...bundlers: IAssetBundler[]): ChainBundler {
+    return new ChainBundler(bundlers);
+  }
+
+  public readonly bundlerKey?: string;
+
+  public readonly outputFileName?: string;
+
+  private constructor(private readonly bundlers: IAssetBundler[]) {
+    if (bundlers.length === 0) {
+      throw chainBundlerRequiresAtLeastOneBundler();
+    }
+    // Fold in every leg's key so which leg runs cannot change identity. A leg
+    // without a key contributes an empty part, still distinguishing "two legs"
+    // from "one leg" positionally.
+    const keys = bundlers.map((b) => b.bundlerKey ?? "");
+    this.bundlerKey = keys.some((k) => k !== "")
+      ? BundlerKey.of("chain", ...keys).toString()
+      : undefined;
+
+    // The staged file name is fixed at construction, before any leg runs, so
+    // legs that declare one must agree — otherwise the name would depend on
+    // which leg happens to run.
+    const names = new Set(
+      bundlers
+        .map((b) => b.outputFileName)
+        .filter((n): n is string => n !== undefined),
+    );
+    if (names.size > 1) {
+      throw chainBundlerConflictingOutputFileName([...names]);
+    }
+    this.outputFileName = names.size === 1 ? [...names][0] : undefined;
+  }
+
+  public bundle(options: BundleOptions): BundleResult {
+    for (let i = 0; i < this.bundlers.length; i++) {
+      // Each leg gets its own output directory. A leg is free to write before
+      // it declines (esbuild failing on an unsupported target, a Docker leg
+      // creating output before finding the daemon down), and sharing one
+      // directory would leak those partial files into the leg that succeeds.
+      const legOutputDir = path.join(options.outputDir, `leg-${i}`);
+      fs.mkdirSync(legOutputDir);
+      const result = this.bundlers[i].bundle({
+        source: options.source,
+        outputDir: legOutputDir,
+      });
+      if (!result.isDeclined) {
+        return result;
+      }
+    }
+    throw chainBundlerAllDeclined(this.bundlers.length);
+  }
+}
+
+/**
  * A staged artifact, ready to hand to an `IAssetPublisher`.
  *
  * Deliberately narrower than a location: `path` and `isDirectory` are known
@@ -382,9 +559,9 @@ export class BundlerKey {
  */
 export interface StagedAsset {
   /**
-   * A hash on the content source. This hash is used to uniquely identify this
-   * asset throughout the system. If this value doesn't change, the asset will
-   * not be rebuilt or republished.
+   * A hash on the content source, uniquely identifying this asset.
+   *
+   * The asset is not rebuilt or republished while this value is unchanged.
    */
   readonly assetHash: string;
 

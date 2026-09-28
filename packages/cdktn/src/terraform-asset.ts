@@ -16,8 +16,10 @@ import { ISynthesisSession } from "./synthesize";
 import { addCustomSynthesis } from "./synthesize/synthesizer";
 import { TerraformStack } from "./terraform-stack";
 import {
+  assetBundlerOutputFileNameInvalid,
   assetExpectsDirectory,
   assetOutOfScopeOfCDKTFJson,
+  assetStagingBundlerFileOutputNeedsFilePackaging,
   assetTypeNotImplemented,
 } from "./errors";
 
@@ -65,8 +67,8 @@ export interface TerraformAssetConfig {
    * Core ships no bundler; implement `IAssetBundler` or use one from a bundler
    * package. Under the default `SOURCE` hashing the build is deferred to synth
    * and stays skippable; `OUTPUT` hashing builds eagerly to hash the artifact.
-   * `AssetType.FILE` is rejected, since bundler output is always a directory.
-   * See `AssetStagingOptions.bundler`.
+   * The bundler's output shape must match `type`. See
+   * `AssetStagingOptions.bundler`.
    *
    * @default - the source is staged verbatim, with no build step
    */
@@ -85,10 +87,16 @@ export enum AssetType {
 const ARCHIVE_BASENAME = "archive";
 const ASSETS_DIRECTORY = "assets";
 
+// A bundler's outputFileName becomes a path segment under the asset's hash
+// directory (see `path`/`fileName`), so it must be a plain file name that
+// cannot traverse or absolutize. Rejects empty, `.`, `..`, and any `/` or `\`.
+const SAFE_OUTPUT_FILE_NAME = /^(?!\.\.?$)[^/\\]+$/;
+
 /**
- * How each `AssetType` is actually written to disk at synthesis time.
- * Internal wiring only: swapping this map's values is how a future format
- * would be added, without any change to the public `AssetType` surface.
+ * Maps each `AssetType` to how it is written to disk at synthesis time.
+ *
+ * Internal only: a future format is added by changing this map's values,
+ * without any change to the public `AssetType` surface.
  */
 const PACKAGING_BY_TYPE: Record<AssetType, IAssetPackaging> = {
   [AssetType.FILE]: AssetPackaging.FILE,
@@ -106,13 +114,13 @@ export class TerraformAsset extends Construct implements IAsset {
   public type: AssetType;
   // owns hashing and packing; `AssetStaging` also validates a custom `assetHash`
   private readonly staging: AssetStaging;
+  // set when a bundler builds the artifact; names a single-file result
+  private readonly bundler?: IAssetBundler;
 
   /**
    * A Terraform Asset takes a file or directory outside of the CDK Terrain context and moves it into it.
+   *
    * Assets copy referenced files into the stacks context for further usage in other resources.
-   * @param scope
-   * @param id
-   * @param config
    */
   constructor(scope: Construct, id: string, config: TerraformAssetConfig) {
     super(scope, id);
@@ -141,11 +149,28 @@ export class TerraformAsset extends Construct implements IAsset {
     const inferredType = stat.isFile() ? AssetType.FILE : AssetType.DIRECTORY;
     this.type = config.type ?? inferredType;
 
-    // Validate the type against the source before staging, so an invalid
-    // combination is rejected here rather than after AssetStaging has already
-    // run an eager bundler build.
-    if (stat.isFile() !== (this.type === AssetType.FILE)) {
+    // Without a bundler the source is staged verbatim, so its shape must match
+    // the type. A bundler decouples them, so the check moves to the bundler
+    // output shape, validated in AssetStaging once the build runs.
+    if (!config.bundler && stat.isFile() !== (this.type === AssetType.FILE)) {
       throw assetExpectsDirectory(id, config.path);
+    }
+
+    this.bundler = config.bundler;
+
+    const outputFileName = config.bundler?.outputFileName;
+    if (outputFileName !== undefined) {
+      if (!SAFE_OUTPUT_FILE_NAME.test(outputFileName)) {
+        throw assetBundlerOutputFileNameInvalid(id, outputFileName);
+      }
+      // outputFileName is declared statically, so a bundler that sets it is
+      // announcing FILE output. Catch a FILE/packaging mismatch now rather
+      // than after a (possibly minutes-long) build; validateOutputShape stays
+      // the backstop for the dynamic case where the shape is only known once
+      // bundle() returns.
+      if (this.type !== AssetType.FILE) {
+        throw assetStagingBundlerFileOutputNeedsFilePackaging(id);
+      }
     }
 
     this.staging = new AssetStaging(this, "Staging", {
@@ -204,11 +229,16 @@ export class TerraformAsset extends Construct implements IAsset {
    */
   public get fileName(): string {
     const { extension } = this.packaging;
-    // Repackaged artifacts (extension set) get a stable base + extension;
-    // verbatim copies keep the source name.
-    return extension
-      ? `${ARCHIVE_BASENAME}${extension}`
-      : path.basename(this.sourcePath);
+    // Repackaged artifacts (extension set) get a stable base + extension.
+    if (extension) {
+      return `${ARCHIVE_BASENAME}${extension}`;
+    }
+    // A single-file bundler artifact uses the name the bundler declares,
+    // falling back to the source basename.
+    if (this.bundler?.outputFileName) {
+      return this.bundler.outputFileName;
+    }
+    return path.basename(this.sourcePath);
   }
 
   private _onSynthesize(session: ISynthesisSession) {

@@ -8,6 +8,8 @@ import {
   AssetPackaging,
   AssetStaging,
   ASSET_HASH_SALT_CONTEXT_KEY,
+  BundleResult,
+  ChainBundler,
   ExcludeIgnoreStrategy,
   type IAssetPackaging,
   TerraformStack,
@@ -293,13 +295,12 @@ describe("AssetStaging", () => {
       const withBundler = new AssetStaging(stack(), "bundled", {
         sourcePath: srcDir,
         packaging: AssetPackaging.DIRECTORY,
-        // Under the default SOURCE hashing, a bundler that produces entirely
-        // different bytes must not change the hash — identity is a function
-        // of the inputs, and the build is deferred (never runs here).
+        // Under SOURCE hashing the build is deferred and never runs here, so
+        // bundler output cannot change the hash.
         bundler: {
           bundle: (opts) => {
             fs.writeFileSync(path.join(opts.outputDir, "built.txt"), "output");
-            return opts.outputDir;
+            return BundleResult.directory(opts.outputDir);
           },
         },
       });
@@ -318,7 +319,7 @@ describe("AssetStaging", () => {
                 path.join(opts.outputDir, "built.txt"),
                 "output",
               );
-              return opts.outputDir;
+              return BundleResult.directory(opts.outputDir);
             },
           },
         });
@@ -332,7 +333,7 @@ describe("AssetStaging", () => {
                 path.join(opts.outputDir, "built.txt"),
                 "output",
               );
-              return opts.outputDir;
+              return BundleResult.directory(opts.outputDir);
             },
           },
         });
@@ -350,7 +351,7 @@ describe("AssetStaging", () => {
           bundler: {
             bundle: (opts) => {
               fs.writeFileSync(path.join(opts.outputDir, "built.txt"), "one");
-              return opts.outputDir;
+              return BundleResult.directory(opts.outputDir);
             },
           },
         });
@@ -361,7 +362,7 @@ describe("AssetStaging", () => {
           bundler: {
             bundle: (opts) => {
               fs.writeFileSync(path.join(opts.outputDir, "built.txt"), "two");
-              return opts.outputDir;
+              return BundleResult.directory(opts.outputDir);
             },
           },
         });
@@ -384,7 +385,7 @@ describe("AssetStaging", () => {
                 path.join(opts.outputDir, "built.txt"),
                 "output",
               );
-              return opts.outputDir;
+              return BundleResult.directory(opts.outputDir);
             },
           },
         });
@@ -414,7 +415,7 @@ describe("AssetStaging", () => {
                 path.join(opts.outputDir, "built.txt"),
                 "output",
               );
-              return opts.outputDir;
+              return BundleResult.directory(opts.outputDir);
             },
           },
         });
@@ -427,17 +428,39 @@ describe("AssetStaging", () => {
         expect(fs.existsSync(observedOutputDir!)).toBe(false);
       });
 
+      test("cleans up the eager-build scratch when the bundler throws in the constructor", () => {
+        let observedOutputDir: string | undefined;
+
+        expect(
+          () =>
+            new AssetStaging(stack(), "staging", {
+              sourcePath: srcDir,
+              packaging: AssetPackaging.DIRECTORY,
+              assetHashType: AssetHashType.OUTPUT,
+              bundler: {
+                bundle: (opts) => {
+                  observedOutputDir = opts.outputDir;
+                  throw new Error("build failed");
+                },
+              },
+            }),
+        ).toThrow(/build failed/);
+
+        // The eager build failed before eagerBuild was set, so stage() can
+        // never reach this scratch; hashOutput must reclaim it immediately.
+        expect(observedOutputDir).toBeDefined();
+        expect(fs.existsSync(path.dirname(observedOutputDir!))).toBe(false);
+      });
+
       test("sweeps the scratch directory on process exit when stage() never runs", () => {
-        // The eager build happens in the constructor but is normally cleaned
-        // up in stage(). When stage() never runs (an unsynthesized stack),
-        // the process-exit hook is the safety net. Exercised in a child
-        // process against the compiled lib so a real `exit` fires; the child
-        // prints the scratch path it created, and the parent asserts it was
+        // When stage() never runs (an unsynthesized stack), the process-exit
+        // hook is the safety net. Run in a child process so a real `exit`
+        // fires: the child prints the scratch path, the parent asserts it was
         // swept.
         const marker = path.join(createTempDir(), "scratch-path.txt");
         const script = `
           const fs = require("fs");
-          const { AssetStaging, App, TerraformStack } = require(${JSON.stringify(
+          const { AssetStaging, App, BundleResult, TerraformStack } = require(${JSON.stringify(
             path.resolve(__dirname, "../lib"),
           )});
           const stack = new TerraformStack(new App(), "s");
@@ -451,7 +474,7 @@ describe("AssetStaging", () => {
               bundle: (opts) => {
                 fs.writeFileSync(${JSON.stringify(marker)}, opts.outputDir);
                 fs.writeFileSync(opts.outputDir + "/built.txt", "output");
-                return opts.outputDir;
+                return BundleResult.directory(opts.outputDir);
               },
             },
           });
@@ -473,7 +496,7 @@ describe("AssetStaging", () => {
           bundle: (opts) => {
             expect(opts.source).toBe(srcDir);
             fs.writeFileSync(path.join(opts.outputDir, "built.txt"), "output");
-            return opts.outputDir;
+            return BundleResult.directory(opts.outputDir);
           },
         },
       });
@@ -501,7 +524,7 @@ describe("AssetStaging", () => {
             const built = path.join(opts.outputDir, "node_modules");
             fs.mkdirSync(built);
             fs.writeFileSync(path.join(built, "dep.js"), "dependency");
-            return opts.outputDir;
+            return BundleResult.directory(opts.outputDir);
           },
         },
       });
@@ -520,14 +543,14 @@ describe("AssetStaging", () => {
       const withoutKey = new AssetStaging(stack(), "without", {
         sourcePath: srcDir,
         packaging: AssetPackaging.DIRECTORY,
-        bundler: { bundle: (opts) => opts.outputDir },
+        bundler: { bundle: (opts) => BundleResult.directory(opts.outputDir) },
       });
       const withKey = new AssetStaging(stack(), "with", {
         sourcePath: srcDir,
         packaging: AssetPackaging.DIRECTORY,
         bundler: {
           bundlerKey: "docker:node:20:npm run build",
-          bundle: (opts) => opts.outputDir,
+          bundle: (opts) => BundleResult.directory(opts.outputDir),
         },
       });
       const withDifferentKey = new AssetStaging(stack(), "different", {
@@ -535,24 +558,12 @@ describe("AssetStaging", () => {
         packaging: AssetPackaging.DIRECTORY,
         bundler: {
           bundlerKey: "docker:node:18:npm run build",
-          bundle: (opts) => opts.outputDir,
+          bundle: (opts) => BundleResult.directory(opts.outputDir),
         },
       });
 
       expect(withKey.assetHash).not.toEqual(withoutKey.assetHash);
       expect(withKey.assetHash).not.toEqual(withDifferentKey.assetHash);
-    });
-
-    test("FILE packaging with a bundler throws", () => {
-      fs.writeFileSync(path.join(srcDir, "single.txt"), "content");
-      expect(
-        () =>
-          new AssetStaging(stack(), "staging", {
-            sourcePath: path.join(srcDir, "single.txt"),
-            packaging: AssetPackaging.FILE,
-            bundler: { bundle: (opts) => opts.outputDir },
-          }),
-      ).toThrow(/file packaging|AssetType\.FILE/i);
     });
 
     test("ARCHIVE packaging with a bundler is allowed", () => {
@@ -562,7 +573,7 @@ describe("AssetStaging", () => {
         bundler: {
           bundle: (opts) => {
             fs.writeFileSync(path.join(opts.outputDir, "built.txt"), "output");
-            return opts.outputDir;
+            return BundleResult.directory(opts.outputDir);
           },
         },
       });
@@ -574,10 +585,9 @@ describe("AssetStaging", () => {
     });
 
     test("a directory-source single-file packaging (e.g. tar.gz) with a bundler is allowed", () => {
-      // Rejection keys on `acceptsDirectorySource`, not on producing a
-      // directory or omitting directory entries. A tar.gz-style packaging
-      // takes a directory source, emits one file, and keeps directory
-      // entries (omitsDirectoryEntries: false) — it must not be rejected.
+      // A tar.gz-style packaging takes a directory source but emits one file;
+      // acceptance keys on `acceptsDirectorySource`, so it must not be
+      // rejected.
       const tarLike: IAssetPackaging = {
         extension: ".tar.gz",
         producesDirectory: false,
@@ -595,7 +605,9 @@ describe("AssetStaging", () => {
           new AssetStaging(stack(), "staging", {
             sourcePath: srcDir,
             packaging: tarLike,
-            bundler: { bundle: (opts) => opts.outputDir },
+            bundler: {
+              bundle: (opts) => BundleResult.directory(opts.outputDir),
+            },
           }),
       ).not.toThrow();
     });
@@ -609,7 +621,7 @@ describe("AssetStaging", () => {
             const dist = path.join(opts.outputDir, "dist");
             fs.mkdirSync(dist);
             fs.writeFileSync(path.join(dist, "bundle.js"), "built");
-            return dist;
+            return BundleResult.directory(dist);
           },
         },
       });
@@ -631,7 +643,7 @@ describe("AssetStaging", () => {
           bundle: (opts) => {
             observedOutputDir = opts.outputDir;
             fs.writeFileSync(path.join(opts.outputDir, "built.txt"), "output");
-            return opts.outputDir;
+            return BundleResult.directory(opts.outputDir);
           },
         },
       });
@@ -677,7 +689,7 @@ describe("AssetStaging", () => {
           bundle: (opts) => {
             observedSource = opts.source;
             fs.writeFileSync(path.join(opts.outputDir, "built.txt"), "output");
-            return opts.outputDir;
+            return BundleResult.directory(opts.outputDir);
           },
         },
       });
@@ -691,10 +703,8 @@ describe("AssetStaging", () => {
     });
 
     test("exclude filters what the bundler reads, and the source is a copy", () => {
-      // With exclusions configured, the bundler must see a filtered copy —
-      // not the original tree — so it reads exactly the file set the hash was
-      // taken over. b.md is excluded, so it must be absent from what the
-      // bundler is handed.
+      // With exclusions, the bundler must see a filtered copy, not the
+      // original tree, so it reads the same file set the hash was taken over.
       let sawExcluded = true;
       let sawIncluded = false;
       let handedSource: string | undefined;
@@ -708,7 +718,7 @@ describe("AssetStaging", () => {
             sawExcluded = fs.existsSync(path.join(opts.source, "b.md"));
             sawIncluded = fs.existsSync(path.join(opts.source, "a.txt"));
             fs.writeFileSync(path.join(opts.outputDir, "built.txt"), "output");
-            return opts.outputDir;
+            return BundleResult.directory(opts.outputDir);
           },
         },
       });
@@ -733,7 +743,7 @@ describe("AssetStaging", () => {
           bundle: (opts) => {
             handedSource = opts.source;
             fs.writeFileSync(path.join(opts.outputDir, "built.txt"), "output");
-            return opts.outputDir;
+            return BundleResult.directory(opts.outputDir);
           },
         },
       });
@@ -745,7 +755,7 @@ describe("AssetStaging", () => {
       expect(handedSource).toEqual(path.resolve(srcDir));
     });
 
-    test("a bundler returning a non-directory throws", () => {
+    test("a directory result that is actually a file throws", () => {
       const staging = new AssetStaging(stack(), "staging", {
         sourcePath: srcDir,
         packaging: AssetPackaging.DIRECTORY,
@@ -753,7 +763,8 @@ describe("AssetStaging", () => {
           bundle: (opts) => {
             const file = path.join(opts.outputDir, "artifact.js");
             fs.writeFileSync(file, "built");
-            return file;
+            // Declares a directory but points at a file.
+            return BundleResult.directory(file);
           },
         },
       });
@@ -763,18 +774,39 @@ describe("AssetStaging", () => {
       expect(() => staging.stage(targetPath)).toThrow(/not a directory/i);
     });
 
-    test("a bundler returning a nonexistent path throws", () => {
+    test("a directory result at a nonexistent path throws", () => {
       const staging = new AssetStaging(stack(), "staging", {
         sourcePath: srcDir,
         packaging: AssetPackaging.DIRECTORY,
         bundler: {
-          bundle: (opts) => path.join(opts.outputDir, "does-not-exist"),
+          bundle: (opts) =>
+            BundleResult.directory(path.join(opts.outputDir, "does-not-exist")),
         },
       });
       const targetPath = path.join(createTempDir(), "out");
       fs.mkdirSync(targetPath, { recursive: true });
 
       expect(() => staging.stage(targetPath)).toThrow(/not a directory/i);
+    });
+
+    test("a file result that is actually a directory throws", () => {
+      fs.writeFileSync(path.join(srcDir, "single.txt"), "content");
+      const staging = new AssetStaging(stack(), "staging", {
+        sourcePath: path.join(srcDir, "single.txt"),
+        packaging: AssetPackaging.FILE,
+        bundler: {
+          bundle: (opts) => {
+            const dir = path.join(opts.outputDir, "not-a-file");
+            fs.mkdirSync(dir);
+            // Declares a file but points at a directory.
+            return BundleResult.file(dir);
+          },
+        },
+      });
+      const targetPath = path.join(createTempDir(), "artifact.txt");
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+
+      expect(() => staging.stage(targetPath)).toThrow(/not a file/i);
     });
 
     test("a second stage() throws instead of rebuilding (OUTPUT)", () => {
@@ -787,7 +819,7 @@ describe("AssetStaging", () => {
           bundle: (opts) => {
             buildCount++;
             fs.writeFileSync(path.join(opts.outputDir, "built.txt"), "output");
-            return opts.outputDir;
+            return BundleResult.directory(opts.outputDir);
           },
         },
       });
@@ -820,15 +852,263 @@ describe("AssetStaging", () => {
 
     test("errors name the caller's displayName, not the staging child id", () => {
       fs.writeFileSync(path.join(srcDir, "single.txt"), "content");
-      expect(
-        () =>
-          new AssetStaging(stack(), "Staging", {
-            sourcePath: path.join(srcDir, "single.txt"),
-            packaging: AssetPackaging.FILE,
-            displayName: "MyAsset",
-            bundler: { bundle: (opts) => opts.outputDir },
-          }),
-      ).toThrow(/TerraformAsset MyAsset/);
+      // A directory-producing bundler with FILE packaging is a shape mismatch,
+      // caught when the build runs. The message must name the caller.
+      const staging = new AssetStaging(stack(), "Staging", {
+        sourcePath: path.join(srcDir, "single.txt"),
+        packaging: AssetPackaging.FILE,
+        displayName: "MyAsset",
+        bundler: {
+          bundle: (opts) => BundleResult.directory(opts.outputDir),
+        },
+      });
+      const targetPath = path.join(createTempDir(), "artifact.txt");
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+
+      expect(() => staging.stage(targetPath)).toThrow(/TerraformAsset MyAsset/);
+    });
+
+    describe("output shape (archive-producing bundlers)", () => {
+      test("a file-producing bundler stages verbatim with FILE packaging", () => {
+        fs.writeFileSync(path.join(srcDir, "single.txt"), "content");
+        const staging = new AssetStaging(stack(), "staging", {
+          sourcePath: path.join(srcDir, "single.txt"),
+          packaging: AssetPackaging.FILE,
+          bundler: {
+            bundle: (opts) => {
+              const archive = path.join(opts.outputDir, "archive.zip");
+              fs.writeFileSync(archive, "zip-bytes");
+              return BundleResult.file(archive);
+            },
+          },
+        });
+        const targetPath = path.join(createTempDir(), "archive.zip");
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+
+        staging.stage(targetPath);
+
+        // Staged as the single file the bundler produced — no wrapper
+        // directory, no double archive.
+        expect(fs.statSync(targetPath).isFile()).toBe(true);
+        expect(fs.readFileSync(targetPath, "utf-8")).toBe("zip-bytes");
+      });
+
+      test("a file-producing bundler under OUTPUT hashing hashes the file", () => {
+        fs.writeFileSync(path.join(srcDir, "single.txt"), "content");
+        const one = new AssetStaging(stack(), "one", {
+          sourcePath: path.join(srcDir, "single.txt"),
+          packaging: AssetPackaging.FILE,
+          assetHashType: AssetHashType.OUTPUT,
+          bundler: {
+            bundle: (opts) => {
+              const archive = path.join(opts.outputDir, "archive.zip");
+              fs.writeFileSync(archive, "bytes-one");
+              return BundleResult.file(archive);
+            },
+          },
+        });
+        const two = new AssetStaging(stack(), "two", {
+          sourcePath: path.join(srcDir, "single.txt"),
+          packaging: AssetPackaging.FILE,
+          assetHashType: AssetHashType.OUTPUT,
+          bundler: {
+            bundle: (opts) => {
+              const archive = path.join(opts.outputDir, "archive.zip");
+              fs.writeFileSync(archive, "bytes-two");
+              return BundleResult.file(archive);
+            },
+          },
+        });
+
+        // Different archive bytes -> different identity.
+        expect(one.assetHash).not.toEqual(two.assetHash);
+      });
+
+      test("a file-producing bundler with DIRECTORY packaging throws", () => {
+        const staging = new AssetStaging(stack(), "staging", {
+          sourcePath: srcDir,
+          packaging: AssetPackaging.DIRECTORY,
+          bundler: {
+            bundle: (opts) => {
+              const archive = path.join(opts.outputDir, "archive.zip");
+              fs.writeFileSync(archive, "zip-bytes");
+              return BundleResult.file(archive);
+            },
+          },
+        });
+        const targetPath = path.join(createTempDir(), "out");
+        fs.mkdirSync(targetPath, { recursive: true });
+
+        expect(() => staging.stage(targetPath)).toThrow(
+          /AssetType\.FILE|single-file/i,
+        );
+      });
+
+      test("a directory-producing bundler with FILE packaging throws", () => {
+        fs.writeFileSync(path.join(srcDir, "single.txt"), "content");
+        const staging = new AssetStaging(stack(), "staging", {
+          sourcePath: path.join(srcDir, "single.txt"),
+          packaging: AssetPackaging.FILE,
+          bundler: {
+            bundle: (opts) => BundleResult.directory(opts.outputDir),
+          },
+        });
+        const targetPath = path.join(createTempDir(), "artifact.txt");
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+
+        expect(() => staging.stage(targetPath)).toThrow(
+          /AssetType\.DIRECTORY|AssetType\.ARCHIVE|single file/i,
+        );
+      });
+    });
+
+    describe("decline protocol and ChainBundler", () => {
+      test("ChainBundler falls through a declining bundler to the next", () => {
+        const calls: string[] = [];
+        const local = {
+          bundlerKey: "local:v1",
+          bundle: () => {
+            calls.push("local");
+            return BundleResult.declined();
+          },
+        };
+        const docker = {
+          bundlerKey: "docker:v1",
+          bundle: (opts: { outputDir: string; source: string }) => {
+            calls.push("docker");
+            fs.writeFileSync(path.join(opts.outputDir, "built.txt"), "output");
+            return BundleResult.directory(opts.outputDir);
+          },
+        };
+        const staging = new AssetStaging(stack(), "staging", {
+          sourcePath: srcDir,
+          packaging: AssetPackaging.DIRECTORY,
+          bundler: ChainBundler.of(local, docker),
+        });
+        const targetPath = path.join(createTempDir(), "out");
+        fs.mkdirSync(targetPath, { recursive: true });
+
+        staging.stage(targetPath);
+
+        expect(calls).toEqual(["local", "docker"]);
+        expect(fs.existsSync(path.join(targetPath, "built.txt"))).toBe(true);
+      });
+
+      test("a leg that writes before declining does not leak into the winning leg", () => {
+        // A declining leg may still have written to its output directory
+        // (esbuild failing partway, a Docker leg creating output before the
+        // daemon check). Per-leg isolation must keep that out of the result.
+        const writesThenDeclines = {
+          bundle: (opts: { outputDir: string; source: string }) => {
+            fs.writeFileSync(path.join(opts.outputDir, "sentinel.txt"), "leak");
+            return BundleResult.declined();
+          },
+        };
+        const succeeds = {
+          bundle: (opts: { outputDir: string; source: string }) => {
+            fs.writeFileSync(path.join(opts.outputDir, "built.txt"), "output");
+            return BundleResult.directory(opts.outputDir);
+          },
+        };
+        const staging = new AssetStaging(stack(), "staging", {
+          sourcePath: srcDir,
+          packaging: AssetPackaging.DIRECTORY,
+          bundler: ChainBundler.of(writesThenDeclines, succeeds),
+        });
+        const targetPath = path.join(createTempDir(), "out");
+        fs.mkdirSync(targetPath, { recursive: true });
+
+        staging.stage(targetPath);
+
+        expect(fs.existsSync(path.join(targetPath, "built.txt"))).toBe(true);
+        expect(fs.existsSync(path.join(targetPath, "sentinel.txt"))).toBe(
+          false,
+        );
+      });
+
+      test("ChainBundler prefers the first bundler that runs", () => {
+        const calls: string[] = [];
+        const local = {
+          bundle: (opts: { outputDir: string; source: string }) => {
+            calls.push("local");
+            fs.writeFileSync(path.join(opts.outputDir, "built.txt"), "local");
+            return BundleResult.directory(opts.outputDir);
+          },
+        };
+        const docker = {
+          bundle: () => {
+            calls.push("docker");
+            return BundleResult.declined();
+          },
+        };
+        const staging = new AssetStaging(stack(), "staging", {
+          sourcePath: srcDir,
+          packaging: AssetPackaging.DIRECTORY,
+          bundler: ChainBundler.of(local, docker),
+        });
+        const targetPath = path.join(createTempDir(), "out");
+        fs.mkdirSync(targetPath, { recursive: true });
+
+        staging.stage(targetPath);
+
+        expect(calls).toEqual(["local"]);
+      });
+
+      test("ChainBundler throws when every bundler declines", () => {
+        const staging = new AssetStaging(stack(), "staging", {
+          sourcePath: srcDir,
+          packaging: AssetPackaging.DIRECTORY,
+          bundler: ChainBundler.of(
+            { bundle: () => BundleResult.declined() },
+            { bundle: () => BundleResult.declined() },
+          ),
+        });
+        const targetPath = path.join(createTempDir(), "out");
+        fs.mkdirSync(targetPath, { recursive: true });
+
+        expect(() => staging.stage(targetPath)).toThrow(/declined/i);
+      });
+
+      test("a bare bundler that declines throws (nothing to fall back to)", () => {
+        const staging = new AssetStaging(stack(), "staging", {
+          sourcePath: srcDir,
+          packaging: AssetPackaging.DIRECTORY,
+          bundler: { bundle: () => BundleResult.declined() },
+        });
+        const targetPath = path.join(createTempDir(), "out");
+        fs.mkdirSync(targetPath, { recursive: true });
+
+        expect(() => staging.stage(targetPath)).toThrow();
+      });
+
+      test("ChainBundler identity is stable regardless of which leg runs", () => {
+        const localKey = "local:v1";
+        const dockerKey = "docker:v1";
+        // Same legs, but the first declines in one and runs in the other; the
+        // chain's bundlerKey folds in both, so identity must match.
+        const chainA = ChainBundler.of(
+          { bundlerKey: localKey, bundle: () => BundleResult.declined() },
+          {
+            bundlerKey: dockerKey,
+            bundle: (opts: { outputDir: string; source: string }) =>
+              BundleResult.directory(opts.outputDir),
+          },
+        );
+        const chainB = ChainBundler.of(
+          {
+            bundlerKey: localKey,
+            bundle: (opts: { outputDir: string; source: string }) =>
+              BundleResult.directory(opts.outputDir),
+          },
+          { bundlerKey: dockerKey, bundle: () => BundleResult.declined() },
+        );
+
+        expect(chainA.bundlerKey).toEqual(chainB.bundlerKey);
+      });
+
+      test("ChainBundler.of() with no bundlers throws", () => {
+        expect(() => ChainBundler.of()).toThrow(/at least one/i);
+      });
     });
   });
 

@@ -8,19 +8,22 @@ import * as path from "path";
 import {
   AssetHashType,
   AssetOptions,
+  BundleOutputType,
   IAsset,
   IAssetBundler,
   IAssetPackaging,
 } from "./assets";
 import {
-  assetFilePackagingWithBundlerUnsupported,
   assetHashConflictingExcludeOptions,
   assetHashConflictingHashType,
   assetHashInvalid,
   assetHashTypeCustomRequiresHash,
   assetHashTypeUnknown,
   assetStagingAlreadyStaged,
+  assetStagingBundlerDirectoryOutputNeedsDirectoryPackaging,
+  assetStagingBundlerFileOutputNeedsFilePackaging,
   assetStagingBundlerOutputNotDirectory,
+  assetStagingBundlerOutputNotFile,
 } from "./errors";
 import { CANONICAL_ASSET_HASHES } from "./features";
 import { ExcludeIgnoreStrategy, IIgnoreStrategy } from "./ignore-strategy";
@@ -51,7 +54,9 @@ export const ASSET_HASH_SALT_CONTEXT_KEY = "cdktn:assetHashSalt";
 const hashCachesByRoot = new WeakMap<IConstruct, Map<string, string>>();
 
 /**
- * @param root - the construct tree root to scope the cache to, see {@link hashCachesByRoot}
+ * The hash cache scoped to a construct-tree root, created on first use.
+ *
+ * See {@link hashCachesByRoot} for why the cache is scoped per root.
  */
 function hashCacheFor(root: IConstruct): Map<string, string> {
   let cache = hashCachesByRoot.get(root);
@@ -164,8 +169,10 @@ export interface AssetStagingOptions extends AssetOptions {
    *
    * Under the default `SOURCE` hashing the build is deferred to `stage()` and
    * stays skippable; `OUTPUT` hashing builds eagerly at construction time to
-   * hash the artifact, forgoing skippability. A bundler always produces a
-   * directory, so single-file packaging (`AssetType.FILE`) is rejected.
+   * hash the artifact, forgoing skippability. The bundler's declared output
+   * shape must match the packaging: a `BundleResult.directory` needs a
+   * directory-accepting packaging, a `BundleResult.file` a single-file one
+   * (`AssetType.FILE`). The mismatch is caught once the build runs.
    *
    * @default - the source is staged verbatim, with no build step
    */
@@ -203,7 +210,11 @@ export class AssetStaging extends Construct implements IAsset {
    *
    * Undefined on every other path, where the build is deferred or absent.
    */
-  private eagerBuild?: { readonly scratch: string; readonly produced: string };
+  private eagerBuild?: {
+    readonly scratch: string;
+    readonly produced: string;
+    readonly outputType: BundleOutputType;
+  };
 
   /**
    * Set once `stage()` has run, so a second call cannot rebuild. An eager
@@ -238,11 +249,9 @@ export class AssetStaging extends Construct implements IAsset {
     this.hasExclusions =
       props.ignoreStrategy !== undefined || !!props.exclude?.length;
 
-    // A bundler always produces a directory, so packaging that cannot take a
-    // directory source would fail with an opaque EISDIR/EPERM at synth.
-    if (this.bundler && !this.packaging.acceptsDirectorySource) {
-      throw assetFilePackagingWithBundlerUnsupported(this.displayName);
-    }
+    // Bundler output shape (directory vs file) is only known once `bundle`
+    // runs, so its compatibility with the packaging is checked then, not here
+    // — a deferred SOURCE build has not run yet at construction time.
 
     this.assetHash = this.resolveAssetHash(this.displayName, props);
   }
@@ -354,35 +363,107 @@ export class AssetStaging extends Construct implements IAsset {
     // Registered so the exit sweep reclaims it if stage() never runs for an
     // unsynthesized stack; stage() removes and unregisters it otherwise.
     registerStrandedScratch(scratch);
-    const produced = this.runBundle(scratch);
-    this.eagerBuild = { scratch, produced };
-    return hashPath(produced, { canonical, archive });
+    try {
+      const { produced, outputType } = this.runBundle(scratch);
+      this.eagerBuild = { scratch, produced, outputType };
+      // A single-file artifact is hashed as a file (no archive framing); a
+      // directory is hashed as the packaged tree would be.
+      const isFile = outputType === BundleOutputType.FILE;
+      return hashPath(produced, { canonical, archive: archive && !isFile });
+    } catch (e) {
+      // The build failed before `eagerBuild` was set, so stage() can never
+      // reach this scratch to clean it. Reclaim it now rather than leaving a
+      // potentially large tree (node_modules, build caches) to the exit sweep.
+      this.cleanupScratch(scratch);
+      throw e;
+    }
   }
 
   /**
    * Run the bundler against the filtered source and return its output.
    *
-   * The bundler is handed an absolute `source` (its cwd is its own — docker
-   * `-w`, esbuild — so a relative path would resolve elsewhere) that has
-   * already had `exclude` applied. Materialising the filtered input here is
-   * what makes the bundler read exactly the tree the hash was taken over: the
-   * two would otherwise disagree, since `hashSource` honours `exclude` but a
-   * raw source hand-off does not. The returned path is validated to be a
-   * directory before packaging.
-   *
-   * @param scratch - caller-owned scratch directory to build within
+   * The bundler is handed an absolute `source` (its cwd is its own, so a
+   * relative path would resolve elsewhere) that has already had `exclude`
+   * applied. Materialising the filtered input here is what makes the bundler
+   * read exactly the tree the hash was taken over, which a raw source
+   * hand-off would not, since `hashSource` honours `exclude`.
    */
-  private runBundle(scratch: string): string {
+  private runBundle(scratch: string): {
+    produced: string;
+    outputType: BundleOutputType;
+  } {
     const outputDir = path.join(scratch, "output");
     fs.mkdirSync(outputDir);
-    const produced = this.bundler!.bundle({
+    const result = this.bundler!.bundle({
       source: this.filteredSource(scratch),
       outputDir,
     });
-    if (!fs.existsSync(produced) || !fs.statSync(produced).isDirectory()) {
+
+    // A bare bundler that declines has nothing to fall back to — declining is
+    // only meaningful inside a ChainBundler, which consumes it before it
+    // reaches here. A non-declined result always carries a path and shape.
+    if (
+      result.isDeclined ||
+      result.path === undefined ||
+      result.outputType === undefined
+    ) {
+      throw assetStagingBundlerOutputNotDirectory(
+        this.displayName,
+        String(result.path),
+      );
+    }
+
+    const produced = result.path;
+    this.validateOutputShape(produced, result.outputType);
+    return { produced, outputType: result.outputType };
+  }
+
+  /**
+   * Reject a bundler result whose declared shape does not match what is on
+   * disk, or does not match the packaging.
+   *
+   * Catching the mismatch here turns an opaque EISDIR/EPERM at pack time into
+   * a clear error naming the packaging the bundler's output shape needs.
+   */
+  private validateOutputShape(
+    produced: string,
+    outputType: BundleOutputType,
+  ): void {
+    const exists = fs.existsSync(produced);
+    const stat = exists ? fs.statSync(produced) : undefined;
+
+    if (outputType === BundleOutputType.FILE) {
+      if (!stat?.isFile()) {
+        throw assetStagingBundlerOutputNotFile(this.displayName, produced);
+      }
+      if (!this.stagesSingleFile) {
+        throw assetStagingBundlerFileOutputNeedsFilePackaging(this.displayName);
+      }
+      return;
+    }
+
+    if (!stat?.isDirectory()) {
       throw assetStagingBundlerOutputNotDirectory(this.displayName, produced);
     }
-    return produced;
+    if (!this.packaging.acceptsDirectorySource) {
+      throw assetStagingBundlerDirectoryOutputNeedsDirectoryPackaging(
+        this.displayName,
+      );
+    }
+  }
+
+  /**
+   * Whether the packaging stages a single file verbatim (AssetType.FILE).
+   *
+   * A verbatim-file packaging neither produces a directory nor reads one as
+   * its source. Derived from existing `IAssetPackaging` flags so out-of-tree
+   * packagings need no new interface member.
+   */
+  private get stagesSingleFile(): boolean {
+    return (
+      !this.packaging.producesDirectory &&
+      !this.packaging.acceptsDirectorySource
+    );
   }
 
   /**
@@ -391,8 +472,6 @@ export class AssetStaging extends Construct implements IAsset {
    * With no exclusions the resolved source is handed over directly. Otherwise
    * the excluded source tree is materialised into the scratch directory, so
    * the bundler sees the same file set the hash was taken over.
-   *
-   * @param scratch - caller-owned scratch directory to materialise into
    */
   private filteredSource(scratch: string): string {
     const absoluteSource = path.resolve(this.sourcePath);
@@ -418,10 +497,8 @@ export class AssetStaging extends Construct implements IAsset {
    * eagerly for `OUTPUT` hashing or deferred to here for `SOURCE`.
    */
   public stage(targetPath: string): void {
-    // Stage exactly once. An eager OUTPUT build is captured at construction
-    // and consumed below; a second call would otherwise fall through to the
-    // deferred path and rebuild, staging bytes a non-deterministic bundler
-    // does not match its already-computed hash.
+    // Stage exactly once: a rebuild could stage bytes not matching the
+    // already-computed hash (see the `staged` field).
     if (this.staged) {
       throw assetStagingAlreadyStaged(this.displayName);
     }
@@ -452,7 +529,7 @@ export class AssetStaging extends Construct implements IAsset {
     // `SOURCE` hashing defers the build to here.
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "cdktn-bundle-"));
     try {
-      const produced = this.runBundle(scratch);
+      const { produced } = this.runBundle(scratch);
       this.packBundlerOutput(produced, targetPath);
     } finally {
       this.cleanupScratch(scratch);
@@ -469,6 +546,10 @@ export class AssetStaging extends Construct implements IAsset {
 
   /**
    * Package a bundler's output into `targetPath`, verbatim.
+   *
+   * The output's shape was already validated against the packaging in
+   * {@link runBundle}, so the packaging handles the source directly — a file
+   * source for AssetType.FILE, a directory source otherwise.
    *
    * The ignore strategy is deliberately not applied. `exclude` filters the
    * source a bundler reads, not its product: an install-style bundler

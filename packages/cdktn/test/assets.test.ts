@@ -1,7 +1,10 @@
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
 import {
+  BundleOutputType,
+  BundleResult,
   BundlerKey,
+  ChainBundler,
   TerraformHclModule,
   TerraformStack,
   Testing,
@@ -185,5 +188,101 @@ describe("BundlerKey", () => {
     const dev = BundlerKey.of("build").withEnv({ NODE_ENV: "development" });
     const prod = BundlerKey.of("build").withEnv({ NODE_ENV: "production" });
     expect(dev.toString()).not.toBe(prod.toString());
+  });
+});
+
+describe("BundleResult", () => {
+  test("directory carries a DIRECTORY output type and the path", () => {
+    const result = BundleResult.directory("/tmp/out");
+    expect(result.outputType).toBe(BundleOutputType.DIRECTORY);
+    expect(result.path).toBe("/tmp/out");
+    expect(result.isDeclined).toBe(false);
+  });
+
+  test("file carries a FILE output type and the path", () => {
+    const result = BundleResult.file("/tmp/archive.zip");
+    expect(result.outputType).toBe(BundleOutputType.FILE);
+    expect(result.path).toBe("/tmp/archive.zip");
+    expect(result.isDeclined).toBe(false);
+  });
+
+  test("declined has no path and is marked declined", () => {
+    const result = BundleResult.declined();
+    expect(result.isDeclined).toBe(true);
+    expect(result.path).toBeUndefined();
+  });
+});
+
+describe("ChainBundler", () => {
+  const declines = { bundle: () => BundleResult.declined() };
+  const runs = {
+    bundle: (opts: { outputDir: string; source: string }) =>
+      BundleResult.directory(opts.outputDir),
+  };
+
+  test("of() requires at least one bundler", () => {
+    expect(() => ChainBundler.of()).toThrow(/at least one/i);
+  });
+
+  test("bundlerKey folds in every leg's key so it depends on both", () => {
+    const both = ChainBundler.of(
+      { bundlerKey: "local:v1", bundle: runs.bundle },
+      { bundlerKey: "docker:v1", bundle: declines.bundle },
+    );
+    const localOnly = ChainBundler.of({
+      bundlerKey: "local:v1",
+      bundle: runs.bundle,
+    });
+    const differentDocker = ChainBundler.of(
+      { bundlerKey: "local:v1", bundle: runs.bundle },
+      { bundlerKey: "docker:v2", bundle: declines.bundle },
+    );
+
+    expect(both.bundlerKey).not.toEqual(localOnly.bundlerKey);
+    expect(both.bundlerKey).not.toEqual(differentDocker.bundlerKey);
+  });
+
+  test("bundlerKey is undefined when no leg contributes a key", () => {
+    const chain = ChainBundler.of(runs, declines);
+    expect(chain.bundlerKey).toBeUndefined();
+  });
+
+  test("two legs with the same single key differ from one leg", () => {
+    const one = ChainBundler.of({ bundlerKey: "k", bundle: runs.bundle });
+    const two = ChainBundler.of(
+      { bundlerKey: "k", bundle: declines.bundle },
+      { bundlerKey: "k", bundle: runs.bundle },
+    );
+    expect(one.bundlerKey).not.toEqual(two.bundlerKey);
+  });
+
+  test("outputFileName is taken from the legs that declare one", () => {
+    const chain = ChainBundler.of(
+      { outputFileName: "archive.zip", bundle: declines.bundle },
+      { bundle: runs.bundle },
+    );
+    expect(chain.outputFileName).toBe("archive.zip");
+  });
+
+  test("legs may agree on outputFileName", () => {
+    const chain = ChainBundler.of(
+      { outputFileName: "archive.zip", bundle: declines.bundle },
+      { outputFileName: "archive.zip", bundle: runs.bundle },
+    );
+    expect(chain.outputFileName).toBe("archive.zip");
+  });
+
+  test("conflicting outputFileName across legs throws", () => {
+    expect(() =>
+      ChainBundler.of(
+        { outputFileName: "a.zip", bundle: declines.bundle },
+        { outputFileName: "b.zip", bundle: runs.bundle },
+      ),
+    ).toThrow(/conflicting outputFileName/i);
+  });
+
+  test("outputFileName is undefined when no leg declares one", () => {
+    const chain = ChainBundler.of(runs, declines);
+    expect(chain.outputFileName).toBeUndefined();
   });
 });
