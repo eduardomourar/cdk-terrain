@@ -1,0 +1,93 @@
+{
+    "name": "@cdktn/bundler-docker",
+    "version": "0.0.0",
+    "description": "Container-based asset bundler for CDK Terrain",
+    "scripts": {
+        "build": "jsii --silence-warnings reserved-word --silence-warnings metadata/missing-dev-dependency",
+        "watch": "jsii -w --silence-warnings reserved-word --silence-warnings metadata/missing-dev-dependency",
+        "watch-preserve-output": "tsc -w --preserveWatchOutput",
+        "package": "node ./scripts/pack.mjs",
+        "package:python": "node ./scripts/pack.mjs python",
+        "package:java": "node ./scripts/pack.mjs java",
+        "package:dotnet": "node ./scripts/pack.mjs dotnet",
+        "package:js": "node ./scripts/pack.mjs js",
+        "package:go": "node ./scripts/pack.mjs go",
+        "test:update": "jest -u",
+        "dist-clean": "rm -rf dist"
+    },
+    "main": "lib/index.js",
+    "types": "lib/index.d.ts",
+    "nx": {
+        "tags": [
+            "unit-test"
+        ]
+    },
+    "keywords": [
+        "cdk",
+        "cdktf",
+        "cdktn",
+        "terraform",
+        "bundler",
+        "asset",
+        "docker"
+    ],
+    "jsii": {
+        "outdir": "dist",
+        "tsc": {
+            "outDir": "lib",
+            "rootDir": "src"
+        },
+        "excludeTypescript": [
+            "src/**/__tests__/**"
+        ],
+        "versionFormat": "short",
+        "license": "MPL-2.0",
+        "author": {
+            "name": "OpenConstructs",
+            "organization": true
+        },
+        "targets": {
+            "python": {
+                "distName": "cdktn-bundler-docker",
+                "module": "cdktn_bundler_docker"
+            },
+            "java": {
+                "package": "io.cdktn.bundler.docker",
+                "maven": {
+                    "groupId": "io.cdktn",
+                    "artifactId": "bundler-docker"
+                }
+            },
+            "dotnet": {
+                "packageId": "Io.Cdktn.Bundler.Docker",
+                "namespace": "Io.Cdktn.Bundler.Docker"
+            },
+            "go": {
+                "moduleName": "github.com/open-constructs/cdk-terrain-go",
+                "packageName": "bundlerdocker"
+            }
+        }
+    },
+    "author": {
+        "name": "OpenConstructs",
+        "url": "https://github.com/open-constructs"
+    },
+    "homepage": "https://github.com/open-constructs/cdk-terrain",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/open-constructs/cdk-terrain.git",
+        "directory": "packages/@cdktn/bundler-docker"
+    },
+    "license": "MPL-2.0",
+    "devDependencies": {
+        "@types/node": "22.20.1",
+        "cdktn": "workspace:*",
+        "jsii": "~6.0.0",
+        "jsii-pacmak": "1.140.0",
+        "typescript": "~6.0.0"
+    },
+    "peerDependencies": {
+        "cdktn": "^0.0.0"
+    },
+    "stability": "experimental"
+}
