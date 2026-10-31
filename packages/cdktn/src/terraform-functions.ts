@@ -40,7 +40,8 @@ export class Fn extends FnGenerated {
    */
   static lookup(inputMap: any, key: string, defaultValue?: any) {
     // overwritten because lookup() uses a variadic argument for its optional defaultValue
-    if (defaultValue) return Fn._lookup(inputMap, key, [defaultValue]);
+    if (defaultValue !== undefined)
+      return Fn._lookup(inputMap, key, [defaultValue]);
     return asAny(propertyAccess(inputMap, [key])); // -> renders inputMap[key] (which is recommended if no default value is given)
   }
 
