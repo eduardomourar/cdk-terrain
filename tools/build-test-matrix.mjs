@@ -46,6 +46,10 @@ const pinnedRuntimes = {
   "typescript/opentofu-target/test.ts": [
     { product: "opentofu", version: "1.12.6" },
   ],
+  // Ephemeral resources need a provider schema from Terraform >= 1.10, which the older `tested` axis cannot emit.
+  "typescript/ephemeral-resources/test.ts": [
+    { product: "terraform", version: "1.16.1" },
+  ],
   "typescript/provider-features/test.ts": [
     { product: "terraform", version: "1.16.1" },
     { product: "opentofu", version: "1.12.6" },
@@ -73,6 +77,8 @@ const pinnedRuntimes = {
 const terraformOnly = new Set([
   // HCP Terraform's workspace API pins a Terraform version and has no OpenTofu equivalent.
   "typescript/terraform-cloud/test.ts",
+  // The project targets Terraform only, so an OpenTofu pairing is not meaningful.
+  "typescript/ephemeral-resources/test.ts",
 ]);
 
 for (const [target, runtimes] of Object.entries(pinnedRuntimes)) {
